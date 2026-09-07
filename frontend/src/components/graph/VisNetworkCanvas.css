@@ -150,3 +150,33 @@
   z-index: 5;
   pointer-events: none;
 }
+
+@media (max-width: 640px) {
+  .vis-graph-toolbar {
+    top: 8px;
+    left: 8px;
+    padding: 2px 4px;
+    gap: 2px;
+  }
+
+  .vis-tool-btn {
+    padding: 5px;
+  }
+
+  .vis-search-box {
+    top: 46px;
+    left: 8px;
+    right: 8px;
+    transform: none;
+    min-width: unset;
+    width: auto;
+    padding: 3px 8px;
+  }
+
+  .vis-graph-meta {
+    bottom: 8px;
+    left: 8px;
+    font-size: 0.625rem;
+    padding: 2px 6px;
+  }
+}

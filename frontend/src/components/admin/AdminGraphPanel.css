@@ -993,3 +993,52 @@
   color: var(--admin-text-muted);
   font-size: 12px;
 }
+
+@media (max-width: 768px) {
+  .admin-topbar {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+    flex-wrap: nowrap;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .admin-dbinfo {
+    position: absolute;
+    left: 44px;
+    top: 0;
+    bottom: 0;
+    z-index: 20;
+    width: min(280px, calc(100vw - 50px));
+    background: var(--admin-surface);
+    box-shadow: 4px 0 16px rgba(0, 0, 0, 0.5);
+  }
+
+  .admin-scribe {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 20;
+    width: min(320px, calc(100vw - 50px));
+    background: var(--admin-surface);
+    box-shadow: -4px 0 16px rgba(0, 0, 0, 0.5);
+  }
+
+  .admin-result-layout {
+    flex-direction: column;
+  }
+
+  .admin-overview {
+    width: 100%;
+  }
+
+  .admin-preset-bar {
+    flex-wrap: wrap;
+  }
+
+  .admin-preset-select {
+    max-width: 100%;
+    width: 100%;
+  }
+}

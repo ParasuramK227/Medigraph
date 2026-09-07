@@ -12,3 +12,11 @@
   overflow: hidden;
   background: var(--color-surface);
 }
+
+@media (max-width: 600px) {
+  .chatbot-page__panel {
+    height: calc(100vh - 200px);
+    min-height: 420px;
+    max-width: 100%;
+  }
+}

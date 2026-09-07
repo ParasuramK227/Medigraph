@@ -332,4 +332,22 @@
   font-size: var(--font-sm);
   border: 1px dashed var(--color-border);
   border-radius: var(--radius-md);
+}
+
+@media (max-width: 600px) {
+  .sector-view__header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+
+  .sector-intel__kpis {
+    grid-template-columns: 1fr;
+  }
+
+  .sector-view__graph-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
 }
