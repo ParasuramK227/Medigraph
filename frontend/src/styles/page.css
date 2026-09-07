@@ -9,10 +9,16 @@
   font-size: 28px;
 }
 
+@media (max-width: 600px) {
+  .page__heading {
+    font-size: 22px;
+  }
+}
+
 .dashboard-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
 }
 
 .stat-card {

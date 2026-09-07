@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Outlet } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { Outlet, useLocation } from 'react-router-dom'
 import { Menu } from 'lucide-react'
 import { SideNav } from './SideNav'
 import { ThemeToggle } from './ThemeToggle'
@@ -9,16 +9,35 @@ import './AppLayout.css'
 
 export function AppLayout() {
   const [navOpen, setNavOpen] = useState(false)
+  const location = useLocation()
+
+  // Close navigation drawer when route changes
+  useEffect(() => {
+    setNavOpen(false)
+  }, [location.pathname])
+
+  // Prevent background scrolling when mobile drawer is open
+  useEffect(() => {
+    if (navOpen) {
+      document.body.style.overflow = 'hidden'
+    } else {
+      document.body.style.overflow = ''
+    }
+    return () => {
+      document.body.style.overflow = ''
+    }
+  }, [navOpen])
 
   return (
     <div className="app-layout">
-      <button
-        type="button"
-        className="app-layout__drawer-backdrop"
-        onClick={() => setNavOpen(false)}
-        aria-hidden={!navOpen}
-        tabIndex={-1}
-      />
+      {navOpen && (
+        <button
+          type="button"
+          className="app-layout__drawer-backdrop app-layout__drawer-backdrop--open"
+          onClick={() => setNavOpen(false)}
+          aria-label="Close navigation"
+        />
+      )}
 
       <aside className={`app-layout__nav ${navOpen ? 'app-layout__nav--open' : ''}`}>
         <SideNav onClose={() => setNavOpen(false)} />

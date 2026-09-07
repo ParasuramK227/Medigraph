@@ -542,3 +542,31 @@
   margin-right: 4px;
 }
 
+@media (max-width: 640px) {
+  .graph-explorer__toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+
+  .graph-explorer__view-switch {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .graph-explorer__switch-btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .graph-explorer__search-wrap {
+    min-width: 100%;
+    max-width: 100%;
+  }
+
+  .graph-explorer__actions {
+    justify-content: flex-end;
+    width: 100%;
+  }
+}
+

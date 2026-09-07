@@ -77,3 +77,20 @@
 .chat-float__toggle:hover {
   transform: translateY(-2px);
 }
+
+@media (max-width: 640px) {
+  .chat-float {
+    right: 12px;
+    left: 12px;
+    bottom: 74px;
+    width: auto;
+    max-height: calc(100vh - 90px);
+  }
+
+  .chat-float__toggle {
+    right: 16px;
+    bottom: 16px;
+    width: 48px;
+    height: 48px;
+  }
+}

@@ -399,3 +399,17 @@
 .nps-action-btn:hover {
   opacity: 0.9;
 }
+
+@media (max-width: 600px) {
+  .nps-sidebar {
+    width: 100%;
+    left: 0;
+    right: 0;
+    border-left: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .nps-close {
+    padding: 8px;
+  }
+}
