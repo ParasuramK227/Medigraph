@@ -5,7 +5,7 @@ import re
 import requests
 from dotenv import load_dotenv
 
-from scribe.privacy import redact_phi, rehydrate_phi
+from scribe.privacy import redact_phi, clean_note_phi
 from scribe.safety import audit_extracted_note
 
 load_dotenv()
@@ -135,21 +135,22 @@ def _validate(data):
 def extract(transcript, patient_name=None, doctor_name=None, deidentify=True):
     """Send an approved transcript to Groq and return a validated structured note.
 
-    Applies local HIPAA Safe Harbor PHI scrubbing before calling Groq, rehydrates
-    local tokens, and executes clinical safety bounds validation on dosages.
+    De-identification is MANDATORY: local HIPAA Safe Harbor PHI scrubbing runs
+    on every outbound transcript and again on the returned note, so names, DOB,
+    age and other direct identifiers can never reach the LLM or appear in the
+    extracted note. Real identities are rendered as readable, non-sensitive
+    placeholders; clinical dosage safety bounds are validated on extracted items.
     """
     api_key = os.environ.get("GROQ_API_KEY_EXTRACTION") or os.environ.get("GROQ_API_KEY")
     if not api_key:
         raise ExtractionError("GROQ_API_KEY_EXTRACTION not configured.")
 
-    token_map = {}
-    prompt_transcript = transcript
-    if deidentify:
-        prompt_transcript, token_map = redact_phi(
-            transcript,
-            patient_name=patient_name,
-            doctor_name=doctor_name,
-        )
+    # De-identification is unconditional — raw PHI never leaves the server.
+    prompt_transcript, _token_map = redact_phi(
+        transcript,
+        patient_name=patient_name,
+        doctor_name=doctor_name,
+    )
 
     system_prompt, user_prompt = _build_prompt(prompt_transcript)
 
@@ -176,13 +177,18 @@ def extract(transcript, patient_name=None, doctor_name=None, deidentify=True):
     content = resp.json()["choices"][0]["message"]["content"]
     parsed_note = _validate(_extract_json(content))
 
-    # Rehydrate local tokens if de-identification was used
-    if token_map:
-        parsed_note = rehydrate_phi(parsed_note, token_map)
+    # Mandatory final scrub: strip any PHI the LLM reintroduced and render
+    # safe-harbor tokens as readable non-sensitive placeholders. PHI is never
+    # re-hydrated back into the note.
+    parsed_note = clean_note_phi(
+        parsed_note,
+        patient_name=patient_name,
+        doctor_name=doctor_name,
+    )
 
     # Perform clinical dosage & sound-alike audit
     audited_note, safety_alerts = audit_extracted_note(parsed_note)
     audited_note["safety_alerts"] = safety_alerts
-    audited_note["deidentified"] = deidentify
+    audited_note["deidentified"] = True
 
     return audited_note

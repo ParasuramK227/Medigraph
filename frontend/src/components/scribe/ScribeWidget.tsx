@@ -16,11 +16,10 @@ import {
   Check,
   Plus,
   Trash2,
-  Cpu,
+  Zap,
 } from 'lucide-react'
 import {
   scribeStart,
-  scribeUpload,
   scribeSaveTranscript,
   scribeExtract,
   scribeSave,
@@ -30,6 +29,12 @@ import {
   type SafetyAlert,
 } from '../../lib/api'
 import { transcribeAudioInBrowser, transcribeAudioSlice } from '../../lib/browserWhisper'
+import {
+  startMoonshineMic,
+  stopMoonshineMic,
+  transcribeFileWithMoonshine,
+} from '../../lib/browserMoonshine'
+import type { MicTranscriber } from '@moonshine-ai/moonshine-wasm'
 import './ScribeWidget.css'
 
 type ScribeStage =
@@ -42,7 +47,7 @@ type ScribeStage =
   | 'saved'
   | 'error'
 
-type STTMode = 'browser-whisper' | 'groq' | 'local' | 'manual'
+type STTMode = 'browser-whisper' | 'moonshine' | 'manual'
 
 interface Props {
   patientId: string
@@ -55,7 +60,6 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
   const [stage, setStage] = useState<ScribeStage>('idle')
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [sttMode, setSttMode] = useState<STTMode>('browser-whisper')
-  const [localModelSize, setLocalModelSize] = useState<string>('base')
   const [clientWhisperStatus, setClientWhisperStatus] = useState<string>('')
 
   // Transcript states
@@ -103,6 +107,10 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
   const isChunkProcessingRef = useRef<boolean>(false)
   const sessionIdRef = useRef<string | null>(null)
 
+  const moonshineMicRef = useRef<MicTranscriber | null>(null)
+  const moonshineLinesRef = useRef<string[]>([])
+  const moonshineInterimRef = useRef<string>('')
+
   useEffect(() => {
     sessionIdRef.current = sessionId
   }, [sessionId])
@@ -118,6 +126,13 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
       liveChunkTimerRef.current = null
     }
     isChunkProcessingRef.current = false
+    if (moonshineMicRef.current) {
+      const mic = moonshineMicRef.current
+      moonshineMicRef.current = null
+      stopMoonshineMic(mic).catch(() => {})
+    }
+    moonshineLinesRef.current = []
+    moonshineInterimRef.current = ''
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop())
       streamRef.current = null
@@ -158,6 +173,10 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
   const handleStartRecording = async () => {
     setErrorMsg('')
     setLiveInterimText('')
+    if (sttMode === 'moonshine') {
+      await handleStartMoonshineRecording()
+      return
+    }
     cleanupMedia()
 
     try {
@@ -200,18 +219,8 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
 
         isChunkProcessingRef.current = true
         try {
-          if (sttMode === 'browser-whisper') {
-            const sliceText = await transcribeAudioSlice(interimBlob)
-            if (sliceText) setLiveInterimText(sliceText)
-          } else if (sttMode === 'groq') {
-            const sid = sessionIdRef.current || init.session_id
-            const res = await scribeUpload(sid, interimBlob, 'groq')
-            if (res.transcript) setLiveInterimText(res.transcript)
-          } else if (sttMode === 'local') {
-            const sid = sessionIdRef.current || init.session_id
-            const res = await scribeUpload(sid, interimBlob, 'local', localModelSize)
-            if (res.transcript) setLiveInterimText(res.transcript)
-          }
+          const sliceText = await transcribeAudioSlice(interimBlob)
+          if (sliceText) setLiveInterimText(sliceText)
         } catch {
           // Background slice error is non-blocking
         } finally {
@@ -220,6 +229,46 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
       }, 3000)
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to start recording. Please allow microphone access.')
+      setStage('idle')
+    }
+  }
+
+  // Start on-device Moonshine streaming transcription (100% in-browser WASM).
+  const handleStartMoonshineRecording = async () => {
+    try {
+      const init = await scribeStart()
+      setSessionId(init.session_id)
+      sessionIdRef.current = init.session_id
+
+      moonshineLinesRef.current = []
+      moonshineInterimRef.current = ''
+      const composeMoonshineLive = () =>
+        [...moonshineLinesRef.current, moonshineInterimRef.current].filter(Boolean).join(' ')
+      setStage('transcribing')
+      setClientWhisperStatus('Preparing Moonshine model (Medium Streaming)...')
+
+      const mic = await startMoonshineMic({
+        onText: (text) => {
+          moonshineInterimRef.current = text
+          setLiveInterimText(composeMoonshineLive())
+        },
+        onLine: (text) => {
+          moonshineLinesRef.current.push(text.trim())
+          moonshineInterimRef.current = ''
+          setLiveInterimText(composeMoonshineLive())
+        },
+        onProgress: (_fraction, status) => setClientWhisperStatus(status),
+        onError: (err) => setErrorMsg(err.message || 'Moonshine transcription error.'),
+      })
+      moonshineMicRef.current = mic
+
+      setClientWhisperStatus('')
+      setStage('recording')
+      timerRef.current = setInterval(() => {
+        setRecordingSeconds((s) => s + 1)
+      }, 1000)
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to start Moonshine. Please allow microphone access.')
       setStage('idle')
     }
   }
@@ -234,6 +283,11 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
       liveChunkTimerRef.current = null
     }
     isChunkProcessingRef.current = false
+
+    if (sttMode === 'moonshine') {
+      await handleStopMoonshineRecording()
+      return
+    }
 
     setStage('transcribing')
     const recorder = mediaRecorderRef.current
@@ -289,41 +343,73 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
       const activeSid = sessionId || (await scribeStart()).session_id
       if (!sessionId) setSessionId(activeSid)
 
-      if (sttMode === 'browser-whisper') {
-        setClientWhisperStatus('Finalizing complete consultation transcript in browser...')
-        const clientText = await transcribeAudioInBrowser(audioBlob, (msg) => {
-          setClientWhisperStatus(msg)
-        })
-        const finalText = clientText || liveInterimText
-        if (finalText) {
-          setTranscript((prev) => (prev ? `${prev} ${finalText}` : finalText))
-        } else {
-          setErrorMsg('No speech recognized in recording. You can dictate again or type directly.')
-        }
-        setClientWhisperStatus('')
-        setStage('review')
+      setClientWhisperStatus('Finalizing complete consultation transcript in browser...')
+      const clientText = await transcribeAudioInBrowser(audioBlob, (msg) => {
+        setClientWhisperStatus(msg)
+      })
+      const finalText = clientText || liveInterimText
+      if (finalText) {
+        setTranscript((prev) => (prev ? `${prev} ${finalText}` : finalText))
       } else {
-        const uploadProvider = sttMode === 'local' ? 'local' : 'groq'
-        const res = await scribeUpload(
-          activeSid,
-          audioBlob,
-          uploadProvider,
-          localModelSize
-        )
-        const serverText = res.transcript || liveInterimText || ''
-        if (serverText) {
-          setTranscript((prev) => (prev ? `${prev} ${serverText}` : serverText))
-        } else {
-          setErrorMsg('No speech recognized in recording. You can dictate again or type directly.')
-        }
-        setStage('review')
+        setErrorMsg('No speech recognized in recording. You can dictate again or type directly.')
       }
+      setClientWhisperStatus('')
+      setStage('review')
     } catch (err: any) {
       if (liveInterimText) {
         setTranscript((prev) => (prev ? `${prev} ${liveInterimText}` : liveInterimText))
       } else {
         setErrorMsg(err.message || 'Transcription failed.')
       }
+      setStage('review')
+    } finally {
+      cleanupMedia()
+    }
+  }
+
+  // Stop on-device Moonshine streaming and merge final lines into the transcript.
+  const handleStopMoonshineRecording = async () => {
+    const mic = moonshineMicRef.current
+    moonshineMicRef.current = null
+
+    setStage('transcribing')
+    setClientWhisperStatus('Finalizing complete consultation transcript on-device...')
+
+    try {
+      if (mic) {
+        await stopMoonshineMic(mic)
+      }
+
+      const finalText = [...moonshineLinesRef.current, moonshineInterimRef.current]
+        .filter(Boolean)
+        .join(' ')
+        .trim()
+
+      if (finalText) {
+        setTranscript((prev) => (prev ? `${prev} ${finalText}` : finalText))
+      } else {
+        setErrorMsg('No speech recognized in recording. You can dictate again or type directly.')
+      }
+
+      moonshineLinesRef.current = []
+      moonshineInterimRef.current = ''
+      setLiveInterimText('')
+      setClientWhisperStatus('')
+      setStage('review')
+    } catch (err: any) {
+      if (moonshineLinesRef.current.length > 0 || moonshineInterimRef.current) {
+        const fallbackText = [...moonshineLinesRef.current, moonshineInterimRef.current]
+          .filter(Boolean)
+          .join(' ')
+          .trim()
+        setTranscript((prev) => (prev ? `${prev} ${fallbackText}` : fallbackText))
+      } else {
+        setErrorMsg(err.message || 'Transcription failed.')
+      }
+      moonshineLinesRef.current = []
+      moonshineInterimRef.current = ''
+      setLiveInterimText('')
+      setClientWhisperStatus('')
       setStage('review')
     } finally {
       cleanupMedia()
@@ -342,25 +428,21 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
       const init = await scribeStart()
       setSessionId(init.session_id)
 
-      if (sttMode === 'browser-whisper') {
+      if (sttMode === 'moonshine') {
+        setClientWhisperStatus('Transcribing uploaded file in browser via Moonshine...')
+        const clientText = await transcribeFileWithMoonshine(file, (msg) => {
+          setClientWhisperStatus(msg)
+        })
+        setTranscript(clientText)
+      } else {
         setClientWhisperStatus('Transcribing uploaded file in browser via Whisper...')
         const clientText = await transcribeAudioInBrowser(file, (msg) => {
           setClientWhisperStatus(msg)
         })
         setTranscript(clientText)
-        setClientWhisperStatus('')
-        setStage('review')
-      } else {
-        const uploadProvider = sttMode === 'local' ? 'local' : 'groq'
-        const res = await scribeUpload(
-          init.session_id,
-          file,
-          uploadProvider,
-          localModelSize
-        )
-        setTranscript(res.transcript || '')
-        setStage('review')
       }
+      setClientWhisperStatus('')
+      setStage('review')
     } catch (err: any) {
       setErrorMsg(err.message || 'Audio file transcription failed.')
       setStage('review')
@@ -535,21 +617,12 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
             </button>
             <button
               type="button"
-              className={`scribe-mode-btn ${sttMode === 'groq' ? 'active' : ''}`}
-              onClick={() => setSttMode('groq')}
-              title="Groq Whisper-Large-v3-Turbo: 0.4s transcription via free tier."
+              className={`scribe-mode-btn ${sttMode === 'moonshine' ? 'active' : ''}`}
+              onClick={() => setSttMode('moonshine')}
+              title="Runs the Moonshine Medium Streaming ONNX model 100% inside your browser tab via WebAssembly. 0 bytes leave your machine, completely private."
             >
-              <Sparkles size={13} />
-              Groq Whisper Turbo
-            </button>
-            <button
-              type="button"
-              className={`scribe-mode-btn ${sttMode === 'local' ? 'active' : ''}`}
-              onClick={() => setSttMode('local')}
-              title="Runs directly on your device with local faster-whisper. 100% offline, zero cloud requests, completely private."
-            >
-              <Cpu size={13} />
-              Local Whisper (Private)
+              <Zap size={13} />
+              Moonshine (On-Device)
             </button>
             <button
               type="button"
@@ -569,23 +642,6 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
           </div>
         )}
       </div>
-
-      {/* Local Whisper model size selector */}
-      {sttMode === 'local' && stage === 'idle' && (
-        <div className="scribe-hf-config">
-          <label className="scribe-hf-label">Local Model Size:</label>
-          <select
-            className="scribe-select"
-            value={localModelSize}
-            onChange={(e) => setLocalModelSize(e.target.value)}
-          >
-            <option value="base">whisper-base (Fastest, ~140MB RAM)</option>
-            <option value="small">whisper-small (High Accuracy, ~460MB RAM)</option>
-            <option value="medium">whisper-medium (Maximum Accuracy, ~1.4GB RAM)</option>
-          </select>
-          <span className="scribe-hint">Runs 100% on your device via faster-whisper (INT8 CPU).</span>
-        </div>
-      )}
 
       {/* Error Banner */}
       {errorMsg && (
@@ -651,7 +707,9 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
               onClick={handleStartRecording}
             >
               <Mic size={16} />
-              Start Dictation ({sttMode === 'browser-whisper' ? 'Whisper Web (ONNX In-Browser)' : sttMode === 'groq' ? 'Groq Whisper Turbo' : `Local Whisper (${localModelSize})`})
+              {sttMode === 'moonshine'
+                ? 'Start Dictation (Moonshine (ONNX On-Device))'
+                : 'Start Dictation (Whisper Web (ONNX In-Browser))'}
             </button>
 
             <label className="scribe-btn scribe-btn--secondary scribe-upload-label">
@@ -670,9 +728,9 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
           <div className="scribe-privacy-pill">
             <ShieldCheck size={14} className="text-success" />
             <span>
-              {sttMode === 'browser-whisper'
-                ? 'Client-Side Whisper Active: Model runs 100% in-browser via WebAssembly. 0 bytes leave your machine.'
-                : 'Local Safe Harbor Shield Active: All patient PHI is masked locally before any AI processing.'}
+              {sttMode === 'moonshine'
+                ? 'Moonshine Active: Model runs 100% in-browser via WebAssembly. 0 bytes leave your machine.'
+                : 'Client-Side Whisper Active: Model runs 100% in-browser via WebAssembly. 0 bytes leave your machine.'}
             </span>
           </div>
         </div>
@@ -685,7 +743,9 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
             <div className="scribe-rec-dot" />
             <span className="scribe-rec-timer">Recording: {formatTimer(recordingSeconds)}</span>
             <span className="scribe-mode-tag">
-              {sttMode === 'browser-whisper' ? 'Whisper Web: Capturing Audio (In-Browser)' : 'Capturing Audio'}
+              {sttMode === 'moonshine'
+                ? 'Moonshine: Capturing Audio (On-Device)'
+                : 'Whisper Web: Capturing Audio (In-Browser)'}
             </span>
           </div>
 
@@ -728,7 +788,12 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
       {stage === 'transcribing' && (
         <div className="scribe-center-loader">
           <Loader2 size={32} className="scribe-spin" />
-          <p>{clientWhisperStatus || 'Transcribing audio via Whisper engine...'}</p>
+          <p>
+            {clientWhisperStatus ||
+              (sttMode === 'moonshine'
+                ? 'Transcribing audio via Moonshine engine...'
+                : 'Transcribing audio via Whisper engine...')}
+          </p>
         </div>
       )}
 
@@ -849,7 +914,7 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
                 <span className="scribe-shield-title">Interactive Approval Studio</span>
                 <span className="scribe-shield-subtitle">
                   {isDeidentified
-                    ? 'Local Safe Harbor Active: Verified against 10-fold dosage bounds & sound-alikes.'
+                    ? 'Local Safe Harbor Active: All PHI (names, DOB, age) removed. Verified against 10-fold dosage bounds & sound-alikes.'
                     : 'Clinical safety audit complete.'}
                 </span>
               </div>

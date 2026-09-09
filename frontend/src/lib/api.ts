@@ -95,44 +95,6 @@ export async function scribeTranslate(
   return res.json()
 }
 
-export interface UploadResult {
-  session_id: string
-  transcript: string
-  status?: string
-  provider?: string
-  error?: string
-  failure_count?: number
-  retry_disabled?: boolean
-}
-
-export async function scribeUpload(
-  sessionId: string,
-  audioBlob: Blob,
-  provider: 'groq' | 'local' | 'hf_space' = 'groq',
-  modelSize?: string,
-  hfEndpoint?: string,
-): Promise<UploadResult> {
-  const form = new FormData()
-  form.append('session_id', sessionId)
-  const mime = audioBlob.type || ''
-  const ext = mime.includes('mp4') ? 'm4a' : mime.includes('wav') ? 'wav' : mime.includes('ogg') ? 'ogg' : 'webm'
-  form.append('audio', audioBlob, `recording.${ext}`)
-  form.append('provider', provider)
-  if (modelSize) {
-    form.append('model_size', modelSize)
-  }
-  if (hfEndpoint) {
-    form.append('hf_endpoint', hfEndpoint)
-  }
-
-  const res = await fetch(`${API_BASE}/api/scribe/upload`, { method: 'POST', body: form })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    throw new Error(data.error || `Upload failed: ${res.status}`)
-  }
-  return data as UploadResult
-}
-
 export async function scribeGetTranscript(sessionId: string): Promise<{
   transcript: string
   approved: boolean

@@ -1,4 +1,4 @@
-# Scribe Extraction Prompt — v2
+# Scribe Extraction Prompt — v3
 
 **Status:** finalized for the current build (validated against `llama-3.3-70b-versatile`).
 
@@ -14,6 +14,9 @@ fabricate any information not present in the transcript. If a field has no
 supporting content in the transcript, return it as an empty array or null —
 never guess.
 
+Never include patient names, dates of birth, ages, or any other personal
+identifiers in any field of the output.
+
 Returns ALL required JSON keys exactly as specified, with values that are valid
 JSON. Return ONLY the JSON object, with no additional commentary.
 ```
@@ -24,8 +27,12 @@ JSON. Return ONLY the JSON object, with no additional commentary.
 {
   "title": "short clinical title summarizing the consultation focus (e.g. Hypertension & Glycemic Follow-Up)",
   "summary": "a brief clinical summary of the consultation",
-  "diagnoses": ["diagnosis or condition discussed"],
-  "action_items": ["follow-up action for the patient or clinician"],
+  "diagnoses": [
+    "diagnosis or condition discussed, INCLUDING chief complaints and symptoms described by the patient (e.g. fever, abdominal pain, headache)"
+  ],
+  "action_items": [
+    "follow-up action for the patient or clinician — INCLUDE prescribed medications (name + dose), rest/activity advice, and lifestyle guidance given during the visit"
+  ],
   "medications_discussed": [
     {
       "name": "medication name (generic or brand)",
@@ -45,3 +52,7 @@ JSON. Return ONLY the JSON object, with no additional commentary.
   "valid JSON values", "NO additional commentary") to improve structured-output
   reliability; annotated the schema with field descriptions. The code enforces
   the JSON object's required keys and list typing at parse time regardless.
+- v3 — diagnoses now include chief complaints/symptoms (fever, abdominal pain)
+  as conditions; action_items include prescribed medications (name + dose) and
+  rest/activity/lifestyle advice; system prompt explicitly forbids including
+  patient names, dates of birth, ages, or other personal identifiers in the output.

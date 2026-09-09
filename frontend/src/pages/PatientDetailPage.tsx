@@ -117,7 +117,7 @@ export function PatientDetailPage() {
           </section>
 
           <section className="patient-detail__card patient-detail__scribe">
-            <ScribeWidget patientId={patient.id} onNoteSaved={loadData} />
+            <ScribeWidget patientId={patient.id} patientName={fullName} onNoteSaved={loadData} />
           </section>
 
           <section className="patient-detail__card">
@@ -301,13 +301,6 @@ export function PatientDetailPage() {
         </div>
       </div>
 
-      <section className="patient-detail__card patient-detail__scribe">
-        <ScribeWidget
-          patientId={patient.id}
-          patientName={`${patient.first_name} ${patient.last_name}`.trim()}
-          onNoteSaved={loadData}
-        />
-      </section>
       {graph && (
         <section className="patient-detail__card patient-detail__card--graph">
           <div className="patient-detail__card-head">

@@ -1,17 +1,11 @@
-import os
 import re
-import tempfile
 import uuid
 
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify
 
 from backend.neo4j_connection import get_session as neo4j_get_session
 from scribe import session as sess
-from scribe.transcription import (
-    transcribe,
-    translate_text,
-    TranscriptionError,
-)
+from scribe.transcription import translate_text
 from scribe.extraction import extract, ExtractionError
 from scribe.safety import audit_medication
 
@@ -46,73 +40,6 @@ def live_translate():
         return jsonify({"error": "text is required"}), 400
     translated = translate_text(text, target_lang=target_lang)
     return jsonify({"translated_text": translated, "original_text": text})
-
-
-@scribe_bp.route("/upload", methods=["POST"])
-def upload_audio():
-    """Accept a full audio file upload and transcribe via Groq Whisper Turbo or Local faster-whisper.
-
-    The frontend first calls /start to get a session_id, then uploads the
-    audio file as multipart form data with that session_id. On transcription
-    failure, the consecutive-failure counter is incremented; after 3 failures
-    the response flags that retry should no longer be offered.
-    """
-    session_id = request.form.get("session_id")
-    if not session_id:
-        return jsonify({"error": "missing session_id"}), 400
-
-    provider = request.form.get("provider", "groq")
-    model_size = request.form.get("model_size", "base")
-    hf_endpoint = request.form.get("hf_endpoint")
-
-    file = request.files.get("audio")
-    if not file:
-        file = request.files.get("file")
-    if not file or not file.filename:
-        return jsonify({"error": "missing audio upload"}), 400
-
-    sess.set_state(session_id, "transcribing")
-
-    suffix = os.path.splitext(file.filename)[1] or ".webm"
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            dir=current_app.config.get("UPLOAD_TEMP_DIR") or tempfile.gettempdir(),
-            suffix=suffix,
-            delete=False,
-        ) as tmp:
-            file.save(tmp.name)
-            tmp_path = tmp.name
-
-        transcript = transcribe(tmp_path, provider=provider, model_size=model_size, hf_endpoint=hf_endpoint)
-
-        # Success — reset failure counter, store transcript for doctor review.
-        sess.set_transcript(session_id, transcript, approved=False)
-        sess.set_state(session_id, "review")
-
-        return jsonify({
-            "session_id": session_id,
-            "transcript": transcript,
-            "status": "review",
-            "provider": provider,
-        })
-    except TranscriptionError as e:
-        failures = sess.record_failure(session_id)
-        return jsonify({
-            "error": str(e),
-            "failure_count": failures,
-            "retry_disabled": sess.retry_disabled(session_id),
-        }), 422
-    except Exception as e:
-        failures = sess.record_failure(session_id)
-        return jsonify({
-            "error": f"Transcription failed: {e}",
-            "failure_count": failures,
-            "retry_disabled": sess.retry_disabled(session_id),
-        }), 500
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
 
 
 @scribe_bp.route("/transcript/<session_id>", methods=["GET"])
@@ -157,8 +84,10 @@ def extract_note(session_id):
 
     Returns 409 if no transcript exists yet, or 400 if the transcript has not
     been explicitly approved — extraction NEVER runs on an unreviewed transcript.
-    Applies local HIPAA Safe Harbor de-identification before sending out and
-    runs clinical dosage safety audits on extracted items.
+    De-identification is mandatory: local HIPAA Safe Harbor PHI scrubbing runs
+    before sending out and again on the returned note, so the structured note
+    never contains names, DOB, age, or other direct identifiers. Clinical dosage
+    safety audits run on extracted items.
     """
     transcript, approved = sess.get_transcript(session_id)
     if transcript is None:
@@ -169,7 +98,9 @@ def extract_note(session_id):
     data = request.get_json(silent=True) or {}
     patient_name = data.get("patient_name")
     doctor_name = data.get("doctor_name")
-    deidentify = data.get("deidentify", True)
+    # De-identification is mandatory: extraction NEVER emits or returns PHI,
+    # regardless of any client-supplied flag.
+    deidentify = True
 
     sess.set_state(session_id, "extracting")
     try:

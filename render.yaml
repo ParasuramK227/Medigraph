@@ -36,6 +36,13 @@ services:
       - type: rewrite
         source: /*
         destination: /index.html
+    headers:
+      - path: /*
+        name: Cross-Origin-Opener-Policy
+        value: same-origin
+      - path: /*
+        name: Cross-Origin-Embedder-Policy
+        value: require-corp
     envVars:
       - key: VITE_API_BASE
         value: https://medigraph-backend.onrender.com
