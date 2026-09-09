@@ -1,6 +1,6 @@
-"""Hugging Face Spaces — Free Whisper Transcription Microservice (Gradio SDK).
+"""Hugging Face Spaces — Free Whisper Transcription Microservice (Gradio + ZeroGPU).
 
-Deployable on Hugging Face Spaces Free 16 GB RAM CPU tier using Gradio SDK (No Docker required).
+Deployable on Hugging Face Spaces Free ZeroGPU / CPU tier using Gradio SDK.
 Provides an interactive web interface AND a direct REST API for MediGraph.
 """
 import os
@@ -9,7 +9,21 @@ import gradio as gr
 from fastapi import UploadFile, File, Form
 from faster_whisper import WhisperModel
 
-# Available models on Hugging Face CPU tier (16GB RAM)
+try:
+    import spaces
+    has_spaces = True
+except ImportError:
+    has_spaces = False
+
+
+def gpu_decorator(fn):
+    """Dynamically allocate Hugging Face ZeroGPU when available."""
+    if has_spaces:
+        return spaces.GPU(duration=60)(fn)
+    return fn
+
+
+# Available models on Hugging Face
 AVAILABLE_MODELS = {
     "whisper-base": "base",
     "whisper-small": "small",
@@ -17,21 +31,30 @@ AVAILABLE_MODELS = {
 }
 
 DEFAULT_MODEL = os.getenv("WHISPER_MODEL", "small")
-print(f"Loading faster-whisper model: {DEFAULT_MODEL} on CPU (INT8)...")
-# int8 compute type runs ultra-fast and lightweight on CPU
-whisper_model = WhisperModel(DEFAULT_MODEL, device="cpu", compute_type="int8")
+
+# Determine device and compute type
+try:
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+except Exception:
+    device = "cpu"
+
+compute_type = "float16" if device == "cuda" else "int8"
+print(f"Loading faster-whisper: {DEFAULT_MODEL} on {device.upper()} ({compute_type})...")
+whisper_model = WhisperModel(DEFAULT_MODEL, device=device, compute_type=compute_type)
 
 
+@gpu_decorator
 def transcribe_audio_file(audio_path: str, model_name: str = "whisper-small") -> str:
-    """Run transcription using faster-whisper."""
+    """Run transcription using faster-whisper with ZeroGPU support."""
     global whisper_model, DEFAULT_MODEL
     if not audio_path:
         return ""
 
     internal_name = AVAILABLE_MODELS.get(model_name, model_name)
     if internal_name != DEFAULT_MODEL:
-        print(f"Switching model to {internal_name}...")
-        whisper_model = WhisperModel(internal_name, device="cpu", compute_type="int8")
+        print(f"Switching model to {internal_name} on {device.upper()}...")
+        whisper_model = WhisperModel(internal_name, device=device, compute_type=compute_type)
         DEFAULT_MODEL = internal_name
 
     segments, info = whisper_model.transcribe(audio_path, beam_size=5, language="en")
@@ -44,7 +67,7 @@ with gr.Blocks(title="MediGraph Whisper Space") as demo:
     gr.Markdown(
         """
         # 🩺 MediGraph — Free Whisper Clinical Transcription Space
-        Running on **Hugging Face Free 16 GB RAM CPU Instance** with `faster-whisper` (INT8 Quantized).
+        Powered by Hugging Face **Free ZeroGPU / CPU** with `faster-whisper`.
         """
     )
     with gr.Row():
@@ -68,7 +91,6 @@ with gr.Blocks(title="MediGraph Whisper Space") as demo:
 
 
 # --- REST API Endpoints for MediGraph Integration ---
-# Gradio 4+ and 5+ expose `demo.app` as a FastAPI application
 @demo.app.post("/transcribe")
 async def api_transcribe(
     file: UploadFile = File(...),
@@ -94,7 +116,13 @@ async def api_transcribe(
 @demo.app.get("/health")
 def api_health():
     """Health check endpoint for MediGraph."""
-    return {"status": "ok", "service": "MediGraph Whisper Space", "model": DEFAULT_MODEL}
+    return {
+        "status": "ok",
+        "service": "MediGraph Whisper Space",
+        "model": DEFAULT_MODEL,
+        "device": device,
+        "zerogpu_active": has_spaces,
+    }
 
 
 if __name__ == "__main__":

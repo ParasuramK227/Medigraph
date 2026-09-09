@@ -97,9 +97,54 @@ def transcribe_hf_space(audio_file_path: str, endpoint: str | None = None) -> st
         raise TranscriptionError(f"Hugging Face Space transcription error: {e}")
 
 
-def transcribe(audio_file_path: str, provider: str = "groq", hf_endpoint: str | None = None) -> str:
-    """Transcribe an audio file using the specified free provider (groq or hf_space)."""
+_LOCAL_MODEL_INSTANCE = None
+_LOCAL_MODEL_NAME = None
+
+
+def transcribe_local(audio_file_path: str, model_size: str = "base") -> str:
+    """Transcribe locally on device using faster-whisper (INT8 CPU).
+
+    Zero cloud dependencies, zero external network requests, 100% private.
+    """
+    global _LOCAL_MODEL_INSTANCE, _LOCAL_MODEL_NAME
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        raise TranscriptionError(
+            "Local Whisper requires 'faster-whisper'. "
+            "Please install it locally by running: pip install faster-whisper"
+        )
+
+    clean_size = model_size.lower().replace("whisper-", "").strip() or "base"
+    if _LOCAL_MODEL_INSTANCE is None or _LOCAL_MODEL_NAME != clean_size:
+        try:
+            _LOCAL_MODEL_INSTANCE = WhisperModel(clean_size, device="cpu", compute_type="int8")
+            _LOCAL_MODEL_NAME = clean_size
+        except Exception as e:
+            raise TranscriptionError(f"Failed to load local Whisper model '{clean_size}': {e}")
+
+    try:
+        segments, info = _LOCAL_MODEL_INSTANCE.transcribe(audio_file_path, beam_size=5, language="en")
+        text = " ".join([segment.text for segment in segments]).strip()
+        if not text:
+            raise TranscriptionError("Local Whisper returned empty transcript.")
+        return text
+    except Exception as e:
+        if isinstance(e, TranscriptionError):
+            raise
+        raise TranscriptionError(f"Local Whisper transcription error: {e}")
+
+
+def transcribe(
+    audio_file_path: str,
+    provider: str = "groq",
+    model_size: str = "base",
+    hf_endpoint: str | None = None,
+) -> str:
+    """Transcribe an audio file using the selected provider ('groq', 'local', or 'hf_space')."""
     clean_provider = provider.lower().strip()
+    if clean_provider in ("local", "on_device", "offline"):
+        return transcribe_local(audio_file_path, model_size=model_size)
     if clean_provider == "hf_space":
         return transcribe_hf_space(audio_file_path, endpoint=hf_endpoint)
     return transcribe_groq(audio_file_path)

@@ -41,7 +41,7 @@ type ScribeStage =
   | 'saved'
   | 'error'
 
-type STTMode = 'webspeech' | 'groq' | 'hf_space' | 'manual'
+type STTMode = 'webspeech' | 'groq' | 'local' | 'manual'
 
 interface Props {
   patientId: string
@@ -54,7 +54,7 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
   const [stage, setStage] = useState<ScribeStage>('idle')
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [sttMode, setSttMode] = useState<STTMode>('webspeech')
-  const [hfEndpoint, setHfEndpoint] = useState<string>('')
+  const [localModelSize, setLocalModelSize] = useState<string>('base')
 
   // Transcript states
   const [transcript, setTranscript] = useState('')
@@ -228,11 +228,12 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
         }
         const activeSid = sessionId || (await scribeStart()).session_id
 
+        const uploadProvider = sttMode === 'local' ? 'local' : 'groq'
         const res = await scribeUpload(
           activeSid,
           audioBlob,
-          sttMode === 'hf_space' ? 'hf_space' : 'groq',
-          sttMode === 'hf_space' ? hfEndpoint : undefined
+          uploadProvider,
+          localModelSize
         )
         setTranscript(res.transcript)
         setStage('review')
@@ -259,11 +260,12 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
       const init = await scribeStart()
       setSessionId(init.session_id)
 
+      const uploadProvider = sttMode === 'local' ? 'local' : 'groq'
       const res = await scribeUpload(
         init.session_id,
         file,
-        sttMode === 'hf_space' ? 'hf_space' : 'groq',
-        sttMode === 'hf_space' ? hfEndpoint : undefined
+        uploadProvider,
+        localModelSize
       )
       setTranscript(res.transcript)
       setStage('review')
@@ -450,12 +452,12 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
             </button>
             <button
               type="button"
-              className={`scribe-mode-btn ${sttMode === 'hf_space' ? 'active' : ''}`}
-              onClick={() => setSttMode('hf_space')}
-              title="Connect to a free Hugging Face Space running faster-whisper."
+              className={`scribe-mode-btn ${sttMode === 'local' ? 'active' : ''}`}
+              onClick={() => setSttMode('local')}
+              title="Runs directly on your device with local faster-whisper. 100% offline, zero cloud requests, completely private."
             >
               <Cpu size={13} />
-              HF Space
+              Local Whisper (Private)
             </button>
             <button
               type="button"
@@ -476,17 +478,20 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
         )}
       </div>
 
-      {/* Hugging Face Space endpoint input (if selected) */}
-      {sttMode === 'hf_space' && stage === 'idle' && (
+      {/* Local Whisper model size selector */}
+      {sttMode === 'local' && stage === 'idle' && (
         <div className="scribe-hf-config">
-          <label className="scribe-hf-label">HF Space URL:</label>
-          <input
-            type="text"
-            className="scribe-hf-input"
-            placeholder="https://your-user-medigraph-whisper.hf.space"
-            value={hfEndpoint}
-            onChange={(e) => setHfEndpoint(e.target.value)}
-          />
+          <label className="scribe-hf-label">Local Model Size:</label>
+          <select
+            className="scribe-select"
+            value={localModelSize}
+            onChange={(e) => setLocalModelSize(e.target.value)}
+          >
+            <option value="base">whisper-base (Fastest, ~140MB RAM)</option>
+            <option value="small">whisper-small (High Accuracy, ~460MB RAM)</option>
+            <option value="medium">whisper-medium (Maximum Accuracy, ~1.4GB RAM)</option>
+          </select>
+          <span className="scribe-hint">Runs 100% on your device via faster-whisper (INT8 CPU).</span>
         </div>
       )}
 
@@ -516,7 +521,7 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
               onClick={handleStartRecording}
             >
               <Mic size={16} />
-              Start Dictation ({sttMode === 'webspeech' ? 'Browser Web Speech' : sttMode === 'groq' ? 'Groq Whisper' : 'HF Space'})
+              Start Dictation ({sttMode === 'webspeech' ? 'Browser Web Speech' : sttMode === 'groq' ? 'Groq Whisper Turbo' : `Local Whisper (${localModelSize})`})
             </button>
 
             <label className="scribe-btn scribe-btn--secondary scribe-upload-label">

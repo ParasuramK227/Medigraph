@@ -75,6 +75,7 @@ def upload_audio():
         return jsonify({"error": "missing session_id"}), 400
 
     provider = request.form.get("provider", "groq")
+    model_size = request.form.get("model_size", "base")
     hf_endpoint = request.form.get("hf_endpoint")
 
     file = request.files.get("audio")
@@ -96,7 +97,7 @@ def upload_audio():
             file.save(tmp.name)
             tmp_path = tmp.name
 
-        transcript = transcribe(tmp_path, provider=provider, hf_endpoint=hf_endpoint)
+        transcript = transcribe(tmp_path, provider=provider, model_size=model_size, hf_endpoint=hf_endpoint)
 
         # Success — reset failure counter, store transcript for doctor review.
         sess.set_transcript(session_id, transcript, approved=False)

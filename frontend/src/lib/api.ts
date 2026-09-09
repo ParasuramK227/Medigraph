@@ -113,13 +113,17 @@ export interface UploadResult {
 export async function scribeUpload(
   sessionId: string,
   audioBlob: Blob,
-  provider: 'groq' | 'hf_space' = 'groq',
+  provider: 'groq' | 'local' | 'hf_space' = 'groq',
+  modelSize?: string,
   hfEndpoint?: string,
 ): Promise<UploadResult> {
   const form = new FormData()
   form.append('session_id', sessionId)
   form.append('audio', audioBlob, 'recording.webm')
   form.append('provider', provider)
+  if (modelSize) {
+    form.append('model_size', modelSize)
+  }
   if (hfEndpoint) {
     form.append('hf_endpoint', hfEndpoint)
   }
