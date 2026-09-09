@@ -29,6 +29,7 @@ import {
   type StructuredMedication,
   type SafetyAlert,
 } from '../../lib/api'
+import { transcribeAudioInBrowser, transcribeAudioSlice } from '../../lib/browserWhisper'
 import './ScribeWidget.css'
 
 type ScribeStage =
@@ -41,7 +42,7 @@ type ScribeStage =
   | 'saved'
   | 'error'
 
-type STTMode = 'webspeech' | 'groq' | 'local' | 'manual'
+type STTMode = 'browser-whisper' | 'groq' | 'local' | 'manual'
 
 interface Props {
   patientId: string
@@ -53,12 +54,13 @@ interface Props {
 export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }: Props) {
   const [stage, setStage] = useState<ScribeStage>('idle')
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const [sttMode, setSttMode] = useState<STTMode>('webspeech')
+  const [sttMode, setSttMode] = useState<STTMode>('browser-whisper')
   const [localModelSize, setLocalModelSize] = useState<string>('base')
+  const [clientWhisperStatus, setClientWhisperStatus] = useState<string>('')
 
   // Transcript states
   const [transcript, setTranscript] = useState('')
-  const [partialTranscript, setPartialTranscript] = useState('')
+  const [liveInterimText, setLiveInterimText] = useState('')
   const [recordingSeconds, setRecordingSeconds] = useState(0)
 
   // Live translation
@@ -89,24 +91,36 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
   const [newMedUnit, setNewMedUnit] = useState('mg')
   const [newMedFreq, setNewMedFreq] = useState('once daily')
 
-  // Refs for recording
+  // Refs for recording & live streaming
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const recognitionRef = useRef<any>(null)
+  const streamRef = useRef<MediaStream | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const recordedMimeTypeRef = useRef<string>('audio/webm')
   const audioChunksRef = useRef<Blob[]>([])
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
-  // Reset recording timers and instances
+  const liveChunkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const isChunkProcessingRef = useRef<boolean>(false)
+  const sessionIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId
+  }, [sessionId])
+
+  // Reset recording timers and hardware instances
   const cleanupMedia = useCallback(() => {
     if (timerRef.current) {
       clearInterval(timerRef.current)
       timerRef.current = null
     }
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop()
-      } catch {}
-      recognitionRef.current = null
+    if (liveChunkTimerRef.current) {
+      clearInterval(liveChunkTimerRef.current)
+      liveChunkTimerRef.current = null
+    }
+    isChunkProcessingRef.current = false
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
     }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
@@ -115,82 +129,98 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
       mediaRecorderRef.current = null
     }
     setRecordingSeconds(0)
-    setPartialTranscript('')
   }, [])
 
   useEffect(() => {
     return () => cleanupMedia()
   }, [cleanupMedia])
 
+  // Detect supported browser audio recording container
+  const getSupportedMimeType = (): string => {
+    if (typeof MediaRecorder === 'undefined') return ''
+    const candidates = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/mp4',
+      'audio/wav',
+    ]
+    for (const t of candidates) {
+      if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) {
+        return t
+      }
+    }
+    return ''
+  }
+
   // --- Handlers: Start / Stop Recording ---
 
   const handleStartRecording = async () => {
     setErrorMsg('')
+    setLiveInterimText('')
     cleanupMedia()
 
     try {
       const init = await scribeStart()
       setSessionId(init.session_id)
+      sessionIdRef.current = init.session_id
 
-      if (sttMode === 'webspeech') {
-        // Use Browser-native Web Speech API
-        const SpeechRecognition =
-          (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-        if (!SpeechRecognition) {
-          throw new Error('Web Speech API is not supported in this browser. Please select Groq Whisper or Chrome.')
+      // Capture microphone audio via MediaRecorder
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+
+      const mimeType = getSupportedMimeType()
+      recordedMimeTypeRef.current = mimeType
+      const options: MediaRecorderOptions = mimeType ? { mimeType } : {}
+      const recorder = new MediaRecorder(stream, options)
+      audioChunksRef.current = []
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          audioChunksRef.current.push(e.data)
         }
-
-        const recognizer = new SpeechRecognition()
-        recognizer.continuous = true
-        recognizer.interimResults = true
-        recognizer.lang = 'en-US'
-
-        recognizer.onresult = (event: any) => {
-          let interim = ''
-          let final = ''
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const item = event.results[i]
-            if (item.isFinal) {
-              final += item[0].transcript + ' '
-            } else {
-              interim += item[0].transcript
-            }
-          }
-          if (final) {
-            setTranscript((prev) => (prev ? prev + ' ' + final.trim() : final.trim()))
-          }
-          setPartialTranscript(interim)
-        }
-
-        recognizer.onerror = (e: any) => {
-          console.warn('Web Speech error:', e)
-        }
-
-        recognizer.start()
-        recognitionRef.current = recognizer
-      } else {
-        // Use MediaRecorder for Groq Whisper or Hugging Face Space
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-        const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
-        audioChunksRef.current = []
-
-        recorder.ondataavailable = (e) => {
-          if (e.data && e.data.size > 0) {
-            audioChunksRef.current.push(e.data)
-          }
-        }
-
-        recorder.start(500)
-        mediaRecorderRef.current = recorder
       }
+
+      recorder.start(500)
+      mediaRecorderRef.current = recorder
 
       setStage('recording')
       timerRef.current = setInterval(() => {
         setRecordingSeconds((s) => s + 1)
       }, 1000)
+
+      // Start rolling 3.5s background chunk worker for live interim STT
+      liveChunkTimerRef.current = setInterval(async () => {
+        if (isChunkProcessingRef.current) return
+        if (audioChunksRef.current.length < 3) return // Need at least ~1.5s of recorded chunks
+
+        const mime = recordedMimeTypeRef.current || 'audio/webm'
+        const interimBlob = new Blob([...audioChunksRef.current], { type: mime })
+        if (interimBlob.size < 4000) return
+
+        isChunkProcessingRef.current = true
+        try {
+          if (sttMode === 'browser-whisper') {
+            const sliceText = await transcribeAudioSlice(interimBlob)
+            if (sliceText) setLiveInterimText(sliceText)
+          } else if (sttMode === 'groq') {
+            const sid = sessionIdRef.current || init.session_id
+            const res = await scribeUpload(sid, interimBlob, 'groq')
+            if (res.transcript) setLiveInterimText(res.transcript)
+          } else if (sttMode === 'local') {
+            const sid = sessionIdRef.current || init.session_id
+            const res = await scribeUpload(sid, interimBlob, 'local', localModelSize)
+            if (res.transcript) setLiveInterimText(res.transcript)
+          }
+        } catch {
+          // Background slice error is non-blocking
+        } finally {
+          isChunkProcessingRef.current = false
+        }
+      }, 3000)
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to start recording')
-      setStage('error')
+      setErrorMsg(err.message || 'Failed to start recording. Please allow microphone access.')
+      setStage('idle')
     }
   }
 
@@ -199,19 +229,12 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
       clearInterval(timerRef.current)
       timerRef.current = null
     }
-
-    if (sttMode === 'webspeech') {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop()
-        } catch {}
-        recognitionRef.current = null
-      }
-      setStage('review')
-      return
+    if (liveChunkTimerRef.current) {
+      clearInterval(liveChunkTimerRef.current)
+      liveChunkTimerRef.current = null
     }
+    isChunkProcessingRef.current = false
 
-    // For Groq or Hugging Face Space, finalize audio and upload
     setStage('transcribing')
     const recorder = mediaRecorderRef.current
     if (!recorder) {
@@ -219,15 +242,67 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
       return
     }
 
-    recorder.onstop = async () => {
-      try {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
-        if (!sessionId) {
-          const init = await scribeStart()
-          setSessionId(init.session_id)
+    try {
+      // Safely await recorder stopping and collecting all audio chunks
+      const audioBlob = await new Promise<Blob>((resolve) => {
+        recorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) {
+            audioChunksRef.current.push(e.data)
+          }
         }
-        const activeSid = sessionId || (await scribeStart()).session_id
+        recorder.onstop = () => {
+          const mime = recordedMimeTypeRef.current || 'audio/webm'
+          const blob = new Blob(audioChunksRef.current, { type: mime })
+          resolve(blob)
+        }
+        try {
+          if (recorder.state === 'recording') {
+            recorder.requestData()
+            recorder.stop()
+          } else {
+            const mime = recordedMimeTypeRef.current || 'audio/webm'
+            resolve(new Blob(audioChunksRef.current, { type: mime }))
+          }
+        } catch {
+          const mime = recordedMimeTypeRef.current || 'audio/webm'
+          resolve(new Blob(audioChunksRef.current, { type: mime }))
+        }
+      })
 
+      // Immediately release hardware microphone stream
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop())
+        streamRef.current = null
+      }
+      mediaRecorderRef.current = null
+
+      if (audioBlob.size < 500) {
+        if (liveInterimText) {
+          setTranscript((prev) => (prev ? `${prev} ${liveInterimText}` : liveInterimText))
+        } else {
+          setErrorMsg('Recording was very short or silent. You can dictate again or type directly.')
+        }
+        setStage('review')
+        return
+      }
+
+      const activeSid = sessionId || (await scribeStart()).session_id
+      if (!sessionId) setSessionId(activeSid)
+
+      if (sttMode === 'browser-whisper') {
+        setClientWhisperStatus('Finalizing complete consultation transcript in browser...')
+        const clientText = await transcribeAudioInBrowser(audioBlob, (msg) => {
+          setClientWhisperStatus(msg)
+        })
+        const finalText = clientText || liveInterimText
+        if (finalText) {
+          setTranscript((prev) => (prev ? `${prev} ${finalText}` : finalText))
+        } else {
+          setErrorMsg('No speech recognized in recording. You can dictate again or type directly.')
+        }
+        setClientWhisperStatus('')
+        setStage('review')
+      } else {
         const uploadProvider = sttMode === 'local' ? 'local' : 'groq'
         const res = await scribeUpload(
           activeSid,
@@ -235,17 +310,24 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
           uploadProvider,
           localModelSize
         )
-        setTranscript(res.transcript)
+        const serverText = res.transcript || liveInterimText || ''
+        if (serverText) {
+          setTranscript((prev) => (prev ? `${prev} ${serverText}` : serverText))
+        } else {
+          setErrorMsg('No speech recognized in recording. You can dictate again or type directly.')
+        }
         setStage('review')
-      } catch (err: any) {
-        setErrorMsg(err.message || 'Transcription failed.')
-        setStage('error')
-      } finally {
-        cleanupMedia()
       }
+    } catch (err: any) {
+      if (liveInterimText) {
+        setTranscript((prev) => (prev ? `${prev} ${liveInterimText}` : liveInterimText))
+      } else {
+        setErrorMsg(err.message || 'Transcription failed.')
+      }
+      setStage('review')
+    } finally {
+      cleanupMedia()
     }
-
-    recorder.stop()
   }
 
   // Handle manual audio file upload
@@ -260,18 +342,28 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
       const init = await scribeStart()
       setSessionId(init.session_id)
 
-      const uploadProvider = sttMode === 'local' ? 'local' : 'groq'
-      const res = await scribeUpload(
-        init.session_id,
-        file,
-        uploadProvider,
-        localModelSize
-      )
-      setTranscript(res.transcript)
-      setStage('review')
+      if (sttMode === 'browser-whisper') {
+        setClientWhisperStatus('Transcribing uploaded file in browser via Whisper...')
+        const clientText = await transcribeAudioInBrowser(file, (msg) => {
+          setClientWhisperStatus(msg)
+        })
+        setTranscript(clientText)
+        setClientWhisperStatus('')
+        setStage('review')
+      } else {
+        const uploadProvider = sttMode === 'local' ? 'local' : 'groq'
+        const res = await scribeUpload(
+          init.session_id,
+          file,
+          uploadProvider,
+          localModelSize
+        )
+        setTranscript(res.transcript || '')
+        setStage('review')
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Audio file transcription failed.')
-      setStage('error')
+      setStage('review')
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
@@ -434,12 +526,12 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
           <div className="scribe-mode-selector">
             <button
               type="button"
-              className={`scribe-mode-btn ${sttMode === 'webspeech' ? 'active' : ''}`}
-              onClick={() => setSttMode('webspeech')}
-              title="Runs 100% inside your browser. Zero backend RAM, zero cost, completely private."
+              className={`scribe-mode-btn ${sttMode === 'browser-whisper' ? 'active' : ''}`}
+              onClick={() => setSttMode('browser-whisper')}
+              title="Runs Whisper-Tiny ONNX 100% inside your browser tab via WebAssembly. 0 bytes leave your machine, completely private."
             >
               <Mic size={13} />
-              Web Speech (Instant)
+              Whisper Web (In-Browser)
             </button>
             <button
               type="button"
@@ -500,9 +592,47 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
         <div className="scribe-error-banner">
           <AlertTriangle size={16} />
           <span>{errorMsg}</span>
-          <button type="button" className="scribe-link-btn" onClick={() => setErrorMsg('')}>
+          <button
+            type="button"
+            className="scribe-link-btn"
+            onClick={() => {
+              setErrorMsg('')
+              if (stage === 'error') setStage('idle')
+            }}
+          >
             Dismiss
           </button>
+        </div>
+      )}
+
+      {/* STAGE: ERROR RECOVERY */}
+      {stage === 'error' && (
+        <div className="scribe-idle-container">
+          <div className="scribe-actions">
+            <button
+              type="button"
+              className="scribe-btn scribe-btn--primary"
+              onClick={() => {
+                setErrorMsg('')
+                setStage('idle')
+              }}
+            >
+              <RotateCcw size={15} />
+              Try Again
+            </button>
+            <button
+              type="button"
+              className="scribe-btn scribe-btn--secondary"
+              onClick={() => {
+                setErrorMsg('')
+                setSttMode('manual')
+                setStage('review')
+              }}
+            >
+              <PenLine size={15} />
+              Type Notes Directly
+            </button>
+          </div>
         </div>
       )}
 
@@ -521,7 +651,7 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
               onClick={handleStartRecording}
             >
               <Mic size={16} />
-              Start Dictation ({sttMode === 'webspeech' ? 'Browser Web Speech' : sttMode === 'groq' ? 'Groq Whisper Turbo' : `Local Whisper (${localModelSize})`})
+              Start Dictation ({sttMode === 'browser-whisper' ? 'Whisper Web (ONNX In-Browser)' : sttMode === 'groq' ? 'Groq Whisper Turbo' : `Local Whisper (${localModelSize})`})
             </button>
 
             <label className="scribe-btn scribe-btn--secondary scribe-upload-label">
@@ -539,7 +669,11 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
 
           <div className="scribe-privacy-pill">
             <ShieldCheck size={14} className="text-success" />
-            <span>Local Safe Harbor Shield Active: All patient PHI is masked locally before any AI processing.</span>
+            <span>
+              {sttMode === 'browser-whisper'
+                ? 'Client-Side Whisper Active: Model runs 100% in-browser via WebAssembly. 0 bytes leave your machine.'
+                : 'Local Safe Harbor Shield Active: All patient PHI is masked locally before any AI processing.'}
+            </span>
           </div>
         </div>
       )}
@@ -551,18 +685,29 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
             <div className="scribe-rec-dot" />
             <span className="scribe-rec-timer">Recording: {formatTimer(recordingSeconds)}</span>
             <span className="scribe-mode-tag">
-              {sttMode === 'webspeech' ? 'Live Browser Dictation' : 'Capturing Audio'}
+              {sttMode === 'browser-whisper' ? 'Whisper Web: Capturing Audio (In-Browser)' : 'Capturing Audio'}
             </span>
           </div>
 
-          {/* Live partial transcription box */}
+          {/* Live recording status box */}
           <div className="scribe-live-box">
-            {transcript ? <span>{transcript}</span> : null}
-            {partialTranscript ? (
-              <span className="scribe-live-partial"> {partialTranscript}...</span>
-            ) : null}
-            {!transcript && !partialTranscript && (
-              <span className="text-muted italic">Listening for speech...</span>
+            {liveInterimText ? (
+              <div className="scribe-live-interim-wrap">
+                <div className="scribe-live-interim-badge">
+                  <span className="scribe-live-pulse-dot" />
+                  <span>Live Speech-to-Text Stream</span>
+                </div>
+                <div className="scribe-live-interim-text">
+                  &ldquo;{liveInterimText}&rdquo;
+                </div>
+              </div>
+            ) : (
+              <div className="scribe-live-listening">
+                <span className="scribe-live-pulse-dot" />
+                <span className="text-muted italic">
+                  Listening for clinical speech... Real-time transcription streams here as you speak.
+                </span>
+              </div>
             )}
           </div>
 
@@ -573,7 +718,7 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
               onClick={handleStopRecording}
             >
               <Square size={16} />
-              Complete & Review Note
+              Stop & Transcribe Note
             </button>
           </div>
         </div>
@@ -583,7 +728,7 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
       {stage === 'transcribing' && (
         <div className="scribe-center-loader">
           <Loader2 size={32} className="scribe-spin" />
-          <p>Transcribing audio via free Whisper engine...</p>
+          <p>{clientWhisperStatus || 'Transcribing audio via Whisper engine...'}</p>
         </div>
       )}
 
@@ -649,6 +794,18 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
           )}
 
           <div className="scribe-actions">
+            {sttMode !== 'manual' && (
+              <button
+                type="button"
+                className="scribe-btn scribe-btn--secondary"
+                onClick={handleStartRecording}
+                title="Dictate additional sentences to append to this transcript"
+              >
+                <Mic size={14} />
+                Dictate More (Append)
+              </button>
+            )}
+
             <button
               type="button"
               className="scribe-btn scribe-btn--primary"
@@ -668,7 +825,7 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
               }}
             >
               <RotateCcw size={14} />
-              Discard
+              Clear & Start Over
             </button>
           </div>
         </div>

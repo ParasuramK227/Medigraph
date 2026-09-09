@@ -83,11 +83,6 @@ export async function scribeStart(): Promise<{ session_id: string }> {
   return res.json()
 }
 
-export async function scribeGetToken(): Promise<{ token?: string; error?: string }> {
-  // Free / local client mode
-  return { token: 'free_client_mode' }
-}
-
 export async function scribeTranslate(
   text: string,
   targetLang = 'English',
@@ -119,7 +114,9 @@ export async function scribeUpload(
 ): Promise<UploadResult> {
   const form = new FormData()
   form.append('session_id', sessionId)
-  form.append('audio', audioBlob, 'recording.webm')
+  const mime = audioBlob.type || ''
+  const ext = mime.includes('mp4') ? 'm4a' : mime.includes('wav') ? 'wav' : mime.includes('ogg') ? 'ogg' : 'webm'
+  form.append('audio', audioBlob, `recording.${ext}`)
   form.append('provider', provider)
   if (modelSize) {
     form.append('model_size', modelSize)

@@ -36,12 +36,6 @@ def start_session():
     return _start_upload()
 
 
-@scribe_bp.route("/token", methods=["GET"])
-def get_realtime_token():
-    """Free client-side token endpoint (Web Speech API / Local Whisper)."""
-    return jsonify({"token": "free_client_mode", "provider": "webspeech"})
-
-
 @scribe_bp.route("/translate", methods=["POST"])
 def live_translate():
     """Translate clinical speech/transcript in real-time into English or another target language."""
@@ -56,7 +50,7 @@ def live_translate():
 
 @scribe_bp.route("/upload", methods=["POST"])
 def upload_audio():
-    """Accept a full audio file upload, transcribe via AssemblyAI.
+    """Accept a full audio file upload and transcribe via Groq Whisper Turbo or Local faster-whisper.
 
     The frontend first calls /start to get a session_id, then uploads the
     audio file as multipart form data with that session_id. On transcription

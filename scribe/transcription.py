@@ -55,8 +55,6 @@ def transcribe_groq(audio_file_path: str) -> str:
 
         result = resp.json()
         text = (result.get("text") or "").strip()
-        if not text:
-            raise TranscriptionError("Whisper returned empty transcript (silence or inaudible audio).")
         return text
     except Exception as e:
         if isinstance(e, TranscriptionError):
@@ -88,8 +86,6 @@ def transcribe_hf_space(audio_file_path: str, endpoint: str | None = None) -> st
 
         data = resp.json()
         text = (data.get("transcript") or "").strip()
-        if not text:
-            raise TranscriptionError("Hugging Face Space returned empty transcript.")
         return text
     except Exception as e:
         if isinstance(e, TranscriptionError):
@@ -126,8 +122,6 @@ def transcribe_local(audio_file_path: str, model_size: str = "base") -> str:
     try:
         segments, info = _LOCAL_MODEL_INSTANCE.transcribe(audio_file_path, beam_size=5, language="en")
         text = " ".join([segment.text for segment in segments]).strip()
-        if not text:
-            raise TranscriptionError("Local Whisper returned empty transcript.")
         return text
     except Exception as e:
         if isinstance(e, TranscriptionError):
