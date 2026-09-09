@@ -26,7 +26,16 @@ JSON. Return ONLY the JSON object, with no additional commentary.
   "summary": "a brief clinical summary of the consultation",
   "diagnoses": ["diagnosis or condition discussed"],
   "action_items": ["follow-up action for the patient or clinician"],
-  "medications_discussed": ["medication name discussed and rationale"]
+  "medications_discussed": [
+    {
+      "name": "medication name (generic or brand)",
+      "dosage": "dosage amount e.g. 5, 10, 500",
+      "unit": "dosage unit e.g. mg, mcg, g, ml, units",
+      "frequency": "frequency e.g. once daily, twice daily, as needed",
+      "route": "route e.g. oral, sublingual, topical, IV",
+      "rationale": "clinical indication or context mentioned"
+    }
+  ]
 }
 ```
 

@@ -9,11 +9,11 @@ from backend.neo4j_connection import get_session as neo4j_get_session
 from scribe import session as sess
 from scribe.transcription import (
     transcribe,
-    create_realtime_token,
     translate_text,
     TranscriptionError,
 )
 from scribe.extraction import extract, ExtractionError
+from scribe.safety import audit_medication
 
 scribe_bp = Blueprint("scribe", __name__)
 
@@ -36,18 +36,6 @@ def start_session():
     return _start_upload()
 
 
-@scribe_bp.route("/token", methods=["GET"])
-def get_realtime_token():
-    """Mint a temporary WebSocket token from AssemblyAI for live in-browser streaming."""
-    try:
-        token = create_realtime_token()
-        return jsonify({"token": token})
-    except TranscriptionError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": f"Failed to generate AssemblyAI token: {e}"}), 500
-
-
 @scribe_bp.route("/translate", methods=["POST"])
 def live_translate():
     """Translate clinical speech/transcript in real-time into English or another target language."""
@@ -62,7 +50,7 @@ def live_translate():
 
 @scribe_bp.route("/upload", methods=["POST"])
 def upload_audio():
-    """Accept a full audio file upload, transcribe via AssemblyAI.
+    """Accept a full audio file upload and transcribe via Groq Whisper Turbo or Local faster-whisper.
 
     The frontend first calls /start to get a session_id, then uploads the
     audio file as multipart form data with that session_id. On transcription
@@ -72,6 +60,10 @@ def upload_audio():
     session_id = request.form.get("session_id")
     if not session_id:
         return jsonify({"error": "missing session_id"}), 400
+
+    provider = request.form.get("provider", "groq")
+    model_size = request.form.get("model_size", "base")
+    hf_endpoint = request.form.get("hf_endpoint")
 
     file = request.files.get("audio")
     if not file:
@@ -92,7 +84,7 @@ def upload_audio():
             file.save(tmp.name)
             tmp_path = tmp.name
 
-        transcript = transcribe(tmp_path)
+        transcript = transcribe(tmp_path, provider=provider, model_size=model_size, hf_endpoint=hf_endpoint)
 
         # Success — reset failure counter, store transcript for doctor review.
         sess.set_transcript(session_id, transcript, approved=False)
@@ -102,6 +94,7 @@ def upload_audio():
             "session_id": session_id,
             "transcript": transcript,
             "status": "review",
+            "provider": provider,
         })
     except TranscriptionError as e:
         failures = sess.record_failure(session_id)
@@ -164,6 +157,8 @@ def extract_note(session_id):
 
     Returns 409 if no transcript exists yet, or 400 if the transcript has not
     been explicitly approved — extraction NEVER runs on an unreviewed transcript.
+    Applies local HIPAA Safe Harbor de-identification before sending out and
+    runs clinical dosage safety audits on extracted items.
     """
     transcript, approved = sess.get_transcript(session_id)
     if transcript is None:
@@ -171,9 +166,19 @@ def extract_note(session_id):
     if not approved:
         return jsonify({"error": "transcript not approved; doctor must approve before extraction"}), 400
 
+    data = request.get_json(silent=True) or {}
+    patient_name = data.get("patient_name")
+    doctor_name = data.get("doctor_name")
+    deidentify = data.get("deidentify", True)
+
     sess.set_state(session_id, "extracting")
     try:
-        note = extract(transcript)
+        note = extract(
+            transcript,
+            patient_name=patient_name,
+            doctor_name=doctor_name,
+            deidentify=deidentify,
+        )
         # Note is staged in the session store until the doctor confirms save.
         sess.set_state(session_id, "extracted")
         return jsonify({
@@ -184,6 +189,24 @@ def extract_note(session_id):
     except ExtractionError as e:
         sess.set_state(session_id, "extract_error")
         return jsonify({"error": str(e), "status": "extract_error"}), 502
+
+
+@scribe_bp.route("/audit-medication", methods=["POST"])
+def audit_single_medication():
+    """Live audit a single medication for clinical safety, 10x dosage errors, and sound-alikes."""
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "")
+    dosage = data.get("dosage")
+    unit = data.get("unit")
+    frequency = data.get("frequency")
+    route = data.get("route")
+
+    alerts = audit_medication(name=name, dosage=dosage, unit=unit, frequency=frequency, route=route)
+    return jsonify({
+        "medication": {"name": name, "dosage": dosage, "unit": unit, "frequency": frequency, "route": route},
+        "alerts": alerts,
+        "is_safe": len(alerts) == 0,
+    })
 
 
 def _clean_med_name(raw: str) -> str:
@@ -232,6 +255,23 @@ def save_note(session_id):
     meds = note.get("medications_discussed", []) or []
     note_id = "CN-" + str(uuid.uuid4())[:8]
 
+    # Convert meds to a list of primitive strings for the ConsultationNote node property
+    meds_summary_strings = []
+    for m in meds:
+        if isinstance(m, dict):
+            name = str(m.get("name") or "").strip()
+            dose = str(m.get("dosage") or "").strip()
+            unit = str(m.get("unit") or "").strip()
+            freq = str(m.get("frequency") or "").strip()
+            parts = [name]
+            if dose:
+                parts.append(f"{dose}{unit}")
+            if freq:
+                parts.append(freq)
+            meds_summary_strings.append(" ".join(parts).strip())
+        elif isinstance(m, str) and m.strip():
+            meds_summary_strings.append(m.strip())
+
     if not title:
         if diagnoses and len(diagnoses) > 0:
             title = f"{str(diagnoses[0]).title()} Consultation"
@@ -267,7 +307,7 @@ def save_note(session_id):
                 summary=summary,
                 diagnoses=diagnoses,
                 action_items=action_items,
-                meds=meds,
+                meds=meds_summary_strings,
             )
 
             # 2. Canonicalize and link Diagnoses: (p)-[:HAS_DIAGNOSIS]->(d), (n)-[:MENTIONS_DIAGNOSIS]->(d)
@@ -291,24 +331,49 @@ def save_note(session_id):
                     d_name=can_name,
                 )
 
-            # 3. Clean and link Medications: (n)-[:DISCUSSES_MEDICATION]->(m), (m)-[:TREATS]->(d)
+            # 3. Clean and link Medications: (n)-[:DISCUSSES_MEDICATION]->(med), (p)-[:PRESCRIBED]->(med), (med)-[:TREATS]->(disease)
             for m in meds:
-                raw_m = m.get("name") if isinstance(m, dict) else str(m)
+                if isinstance(m, dict):
+                    raw_m = m.get("name", "")
+                    dosage = m.get("dosage")
+                    unit = m.get("unit")
+                    freq = m.get("frequency")
+                    route = m.get("route")
+                    rationale = m.get("rationale")
+                else:
+                    raw_m = str(m)
+                    dosage, unit, freq, route, rationale = None, None, None, None, None
+
                 clean_m = _clean_med_name(raw_m)
                 if not clean_m:
                     continue
+
                 s.run(
                     """
                     MATCH (n:ConsultationNote {id: $note_id})
+                    MATCH (p:Patient {id: $patient_id})
                     MERGE (med:Medication {name: $m_name})
-                    MERGE (n)-[:DISCUSSES_MEDICATION]->(med)
+                    MERGE (n)-[dm:DISCUSSES_MEDICATION]->(med)
+                    SET dm.dosage = $dosage, dm.unit = $unit, dm.frequency = $freq, dm.route = $route, dm.rationale = $rationale
+                    MERGE (p)-[pr:PRESCRIBED]->(med)
+                    SET pr.dosage = coalesce($dosage, pr.dosage),
+                        pr.unit = coalesce($unit, pr.unit),
+                        pr.frequency = coalesce($freq, pr.frequency),
+                        pr.route = coalesce($route, pr.route),
+                        pr.status = 'Active'
                     WITH med
                     UNWIND $diseases AS d_name
                     MATCH (disease:Disease {name: d_name})
                     MERGE (med)-[:TREATS]->(disease)
                     """,
                     note_id=note_id,
+                    patient_id=patient_id,
                     m_name=clean_m,
+                    dosage=dosage,
+                    unit=unit,
+                    freq=freq,
+                    route=route,
+                    rationale=rationale,
                     diseases=canonical_diseases,
                 )
 

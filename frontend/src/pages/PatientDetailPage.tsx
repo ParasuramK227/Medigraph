@@ -132,8 +132,8 @@ export function PatientDetailPage() {
                   <div className="patient-detail__history-block">
                     <div className="patient-detail__history-label">Diagnoses ({history.diagnoses.length})</div>
                     <div className="patient-detail__chips">
-                      {history.diagnoses.map((d) => (
-                        <span className="patient-detail__chip patient-detail__chip--disease" key={d}>
+                      {history.diagnoses.map((d, i) => (
+                        <span className="patient-detail__chip patient-detail__chip--disease" key={`${d}-${i}`}>
                           {d}
                         </span>
                       ))}
@@ -147,8 +147,8 @@ export function PatientDetailPage() {
                       <Stethoscope size={13} /> Treatments & Procedures ({history.treatments.length})
                     </div>
                     <ul className="patient-detail__list">
-                      {history.treatments.map((t) => (
-                        <li key={t.id} className="patient-detail__item-row">
+                      {history.treatments.map((t, i) => (
+                        <li key={`${t.id || 't'}-${i}`} className="patient-detail__item-row">
                           <div className="patient-detail__item-main">
                             <span className="patient-detail__item-title">{t.type ?? 'Treatment'}</span>
                             {t.outcome && (
@@ -176,8 +176,8 @@ export function PatientDetailPage() {
                       <Microscope size={13} /> Lab Tests & Vitals ({history.labs.length})
                     </div>
                     <ul className="patient-detail__list">
-                      {history.labs.map((l) => (
-                        <li key={l.id} className="patient-detail__item-row">
+                      {history.labs.map((l, i) => (
+                        <li key={`${l.id || 'l'}-${i}`} className="patient-detail__item-row">
                           <div className="patient-detail__item-main">
                             <span className="patient-detail__item-title">{cleanLabName(l.name)}</span>
                             <div className="patient-detail__lab-value">
@@ -209,8 +209,8 @@ export function PatientDetailPage() {
                       <ClipboardList size={13} /> Consultation notes
                     </div>
                     <ul className="patient-detail__list patient-detail__list--notes">
-                      {history.notes.map((n) => (
-                        <li key={n.id} className="patient-detail__note-card">
+                      {history.notes.map((n, i) => (
+                        <li key={`${n.id || 'n'}-${i}`} className="patient-detail__note-card">
                           <div className="patient-detail__note-head">
                             <span className="patient-detail__date-badge">
                               <Calendar size={12} /> {formatClinicalDate(n.created_at)}
@@ -233,7 +233,7 @@ export function PatientDetailPage() {
                       {history.allergies.map((a, i) => (
                         <span
                           className="patient-detail__chip patient-detail__chip--allergy"
-                          key={a.id || i}
+                          key={`${a.id ?? a.substance ?? 'a'}-${i}`}
                         >
                           {a.substance} {a.severity ? `(${a.severity})` : ''}
                         </span>
@@ -255,8 +255,8 @@ export function PatientDetailPage() {
               <p className="patient-detail__muted">No similar patients found.</p>
             ) : (
               <ul className="patient-detail__similar">
-                {intel.similar_patients.map((s) => (
-                  <li key={s.id ?? s.patient_id}>
+                {intel.similar_patients.map((s, i) => (
+                  <li key={`${s.id ?? s.patient_id ?? 'sp'}-${i}`}>
                     <Link
                       to={`/patients/${s.id ?? s.patient_id}`}
                       className="patient-detail__similar-link"
@@ -283,12 +283,12 @@ export function PatientDetailPage() {
               <p className="patient-detail__muted">No matching medications in the graph.</p>
             ) : (
               <ul className="patient-detail__med-groups">
-                {Object.entries(intel.medications).map(([disease, meds]) => (
-                  <li key={disease} className="patient-detail__med-group">
+                {Object.entries(intel.medications).map(([disease, meds], i) => (
+                  <li key={`${disease}-${i}`} className="patient-detail__med-group">
                     <div className="patient-detail__med-disease-badge">{disease}</div>
                     <div className="patient-detail__chips">
-                      {meds.map((m) => (
-                        <span className="patient-detail__chip patient-detail__chip--med" key={m}>
+                      {meds.map((m, mi) => (
+                        <span className="patient-detail__chip patient-detail__chip--med" key={`${disease}-${m}-${mi}`}>
                           {m}
                         </span>
                       ))}
@@ -301,6 +301,13 @@ export function PatientDetailPage() {
         </div>
       </div>
 
+      <section className="patient-detail__card patient-detail__scribe">
+        <ScribeWidget
+          patientId={patient.id}
+          patientName={`${patient.first_name} ${patient.last_name}`.trim()}
+          onNoteSaved={loadData}
+        />
+      </section>
       {graph && (
         <section className="patient-detail__card patient-detail__card--graph">
           <div className="patient-detail__card-head">

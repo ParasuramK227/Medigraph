@@ -268,17 +268,27 @@ export function VisNetworkCanvas({
     })
 
     // Center on requested node if provided
+    let focusTimer: ReturnType<typeof setTimeout> | null = null
     if (centerId && nodeMap.has(centerId)) {
-      setTimeout(() => {
-        network.focus(centerId, {
-          scale: 1.15,
-          animation: { duration: 600, easingFunction: 'easeInOutQuad' },
-        })
+      focusTimer = setTimeout(() => {
+        try {
+          if (networkRef.current && nodeMap.has(centerId)) {
+            network.focus(centerId, {
+              scale: 1.15,
+              animation: { duration: 600, easingFunction: 'easeInOutQuad' },
+            })
+          }
+        } catch {
+          // Ignore focus if node or network unmounted
+        }
       }, 350)
     }
 
     return () => {
-      network.destroy()
+      if (focusTimer) clearTimeout(focusTimer)
+      try {
+        network.destroy()
+      } catch {}
       networkRef.current = null
     }
   }, [nodes, edges, matchId, physicsEnabled, centerId, nodeMap, handleSelectNode])
@@ -286,11 +296,15 @@ export function VisNetworkCanvas({
   // Center on searched node
   useEffect(() => {
     if (matchId && networkRef.current) {
-      networkRef.current.focus(matchId, {
-        scale: 1.2,
-        animation: { duration: 500, easingFunction: 'easeInOutQuad' },
-      })
-      handleSelectNode(matchId)
+      try {
+        networkRef.current.focus(matchId, {
+          scale: 1.2,
+          animation: { duration: 500, easingFunction: 'easeInOutQuad' },
+        })
+        handleSelectNode(matchId)
+      } catch {
+        // Ignore focus error
+      }
     }
   }, [matchId, handleSelectNode])
 
