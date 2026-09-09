@@ -1,13 +1,12 @@
-"""Hugging Face Spaces — Free Whisper Transcription Microservice.
+"""Hugging Face Spaces — Free Whisper Transcription Microservice (Gradio SDK).
 
-Deployable on Hugging Face Spaces Free 16 GB RAM CPU tier.
-Provides a REST API for MediGraph and an interactive Gradio test interface.
+Deployable on Hugging Face Spaces Free 16 GB RAM CPU tier using Gradio SDK (No Docker required).
+Provides an interactive web interface AND a direct REST API for MediGraph.
 """
 import os
 import tempfile
 import gradio as gr
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import UploadFile, File, Form
 from faster_whisper import WhisperModel
 
 # Available models on Hugging Face CPU tier (16GB RAM)
@@ -23,39 +22,63 @@ print(f"Loading faster-whisper model: {DEFAULT_MODEL} on CPU (INT8)...")
 whisper_model = WhisperModel(DEFAULT_MODEL, device="cpu", compute_type="int8")
 
 
-def transcribe_audio_file(audio_path: str, model_name: str = DEFAULT_MODEL) -> str:
+def transcribe_audio_file(audio_path: str, model_name: str = "whisper-small") -> str:
     """Run transcription using faster-whisper."""
     global whisper_model, DEFAULT_MODEL
-    if model_name != DEFAULT_MODEL and model_name in AVAILABLE_MODELS:
-        whisper_model = WhisperModel(AVAILABLE_MODELS[model_name], device="cpu", compute_type="int8")
-        DEFAULT_MODEL = model_name
+    if not audio_path:
+        return ""
+
+    internal_name = AVAILABLE_MODELS.get(model_name, model_name)
+    if internal_name != DEFAULT_MODEL:
+        print(f"Switching model to {internal_name}...")
+        whisper_model = WhisperModel(internal_name, device="cpu", compute_type="int8")
+        DEFAULT_MODEL = internal_name
 
     segments, info = whisper_model.transcribe(audio_path, beam_size=5, language="en")
     transcript = " ".join([segment.text for segment in segments]).strip()
     return transcript
 
 
-# FastAPI backend for MediGraph API requests
-app = FastAPI(title="MediGraph Free Whisper Service")
+# --- Gradio Web UI ---
+with gr.Blocks(title="MediGraph Whisper Space") as demo:
+    gr.Markdown(
+        """
+        # 🩺 MediGraph — Free Whisper Clinical Transcription Space
+        Running on **Hugging Face Free 16 GB RAM CPU Instance** with `faster-whisper` (INT8 Quantized).
+        """
+    )
+    with gr.Row():
+        with gr.Column():
+            audio_input = gr.Audio(type="filepath", label="Upload or Record Consultation Audio")
+            model_selector = gr.Dropdown(
+                choices=["whisper-base", "whisper-small", "whisper-medium"],
+                value="whisper-small",
+                label="Whisper Model Selection",
+            )
+            transcribe_btn = gr.Button("Transcribe Clinical Audio", variant="primary")
+        with gr.Column():
+            output_text = gr.Textbox(label="Transcribed Clinical Transcript", lines=10)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    transcribe_btn.click(
+        fn=transcribe_audio_file,
+        inputs=[audio_input, model_selector],
+        outputs=output_text,
+        api_name="transcribe",
+    )
 
 
-@app.post("/transcribe")
+# --- REST API Endpoints for MediGraph Integration ---
+# Gradio 4+ and 5+ expose `demo.app` as a FastAPI application
+@demo.app.post("/transcribe")
 async def api_transcribe(
     file: UploadFile = File(...),
-    model: str = Form("small"),
+    model: str = Form("whisper-small"),
 ):
     """REST endpoint called by MediGraph backend."""
     suffix = os.path.splitext(file.filename or "")[1] or ".wav"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
+        content = await file.read()
+        tmp.write(content)
         tmp_path = tmp.name
 
     try:
@@ -68,26 +91,11 @@ async def api_transcribe(
             os.remove(tmp_path)
 
 
-@app.get("/health")
+@demo.app.get("/health")
 def api_health():
+    """Health check endpoint for MediGraph."""
     return {"status": "ok", "service": "MediGraph Whisper Space", "model": DEFAULT_MODEL}
 
 
-# Gradio interactive UI mounted at the root
-demo = gr.Interface(
-    fn=transcribe_audio_file,
-    inputs=[
-        gr.Audio(type="filepath", label="Upload Clinical Audio / Dictation"),
-        gr.Dropdown(choices=["whisper-base", "whisper-small", "whisper-medium"], value="whisper-small", label="Whisper Model"),
-    ],
-    outputs=gr.Textbox(label="Transcribed Clinical Text", lines=8),
-    title="MediGraph — Free Medical Whisper Transcription Space",
-    description="Running on Hugging Face Free 16 GB RAM CPU Instance with faster-whisper INT8.",
-)
-
-# Mount Gradio onto FastAPI
-app = gr.mount_gradio_app(app, demo, path="/")
-
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    demo.launch(server_name="0.0.0.0", server_port=7860)
