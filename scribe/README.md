@@ -1,71 +1,70 @@
-# MediGraph — Scribe Pipeline
+# MediGraph — AI Clinical Scribe Pipeline
 
-The scribe is MediGraph's centerpiece feature: it turns a recorded consultation into a structured, doctor-verified clinical note stored in the knowledge graph.
+The AI Clinical Scribe transcribes doctor-patient consultations, offers real-time multilingual translation, enables doctor review, and extracts structured clinical records directly into the Neo4j healthcare knowledge graph.
 
-See the [root README](../README.md) for full product context.
+---
 
-## Pipeline stages
-
-```
-[Record] → [Transcribe (local Whisper)] → [Review & Edit (doctor, required)] → [Extract (Groq)] → [Save to Neo4j]
-```
-
-1. **Record**
-   - Started from the patient detail view or the Admin Graph Panel.
-   - A live audio-level visualizer (CAVA-inspired) confirms the mic is capturing audio in real time.
-
-2. **Transcribe**
-   - Runs **after** the full recording is uploaded — this is not a live-streaming STT pipeline.
-   - Uses a local **Whisper `whisper-medium`** model (Hugging Face) — no external STT API call, no network dependency for this step.
-   - A partial/live transcript is shown as it becomes available purely as a visual confirmation that processing is happening — it is not what gets edited or extracted from until transcription fully completes.
-   - Output: a flat transcript. No speaker diarization (doctor vs. patient) in this build — out of scope given the timeline.
-   - English only.
-
-3. **Review & Edit (mandatory, doctor-only step)**
-   - The doctor **must** be able to edit the transcript directly.
-   - Extraction is never triggered automatically on transcription completion — it only runs once the doctor explicitly approves the (possibly edited) transcript.
-   - This exists specifically to prevent LLM hallucinations from compounding on top of STT errors.
-
-4. **Extract**
-   - The approved transcript is sent to **Groq** (LLM, accuracy-optimized model choice — e.g. `llama-3.3-70b-versatile` — since accuracy matters more than latency for this use case) using a **versioned prompt/schema** (see below), returning a structured note.
-   - Structured note fields (indicative): summary, diagnoses discussed, action items, medications discussed.
-
-5. **Save**
-   - The structured note is persisted to Neo4j, attached to the patient node.
-   - It becomes visible in: the patient's own graph view, the Admin Graph Panel (as an inspectable node), and via chatbot queries.
-   - Where relevant, outcomes captured in the note feed into **Treatment Intelligence** over time — consultations are not a dead-end, disconnected feature.
-
-## Failure handling
-
-If transcription fails (bad audio, silence, corrupted upload, etc.):
-
-- The doctor is shown a choice: **Retry** or **Switch to a manually typed note**.
-- Failure count is tracked per session.
-- After **3 consecutive failures**, retry is no longer offered — manual typed entry becomes the only path forward, to avoid trapping the doctor in a failure loop.
-
-## Prompt / Schema Versioning
-
-The extraction prompt and output schema are versioned in-repo (not just embedded inline in code) so the exact ask given to the LLM is inspectable:
+## Pipeline Architecture
 
 ```
-/scribe/prompts/scribe_extraction.md      ← current version
-/scribe/prompts/scribe_extraction_v0.md   ← prior versions, if superseded
+[Audio Capture + CAVA Visualizer]
+               │
+               ▼
+[AssemblyAI Streaming / REST STT] ──► [Live Translation (Groq)]
+               │
+               ▼
+[Doctor Verification & Review]  (Mandatory — Prevents Hallucination Compounding)
+               │
+               ▼
+[SOAP Note Extraction (Groq gpt-oss-120b)]
+               │
+               ▼
+[Save to Neo4j Knowledge Graph] (:ConsultationNote linked to :Patient, :Disease, :Medication)
 ```
 
-Each version should document:
-- The exact system/user prompt template.
-- The expected output JSON schema.
-- The Groq model it was validated against.
-- Date/reason for any change from the previous version.
+---
 
-## Visual feedback requirements
+## Pipeline Stages
 
-Every stage above must be visually represented in the UI — recording, transcribing, awaiting review, extracting, and saved/error states all need a distinct, visible indicator. The doctor should never be left looking at a UI that gives no indication of what's currently happening.
+### 1. Audio Capture & Live Visualizer
+- Initiated from the **Patient Detail View** (`/patients/:id`) or **Admin Graph Panel** (`/admin/graph`).
+- Integrated CAVA-style animated audio-level visualizer confirms microphone input in real time.
 
-## Explicit non-goals for this build
+### 2. Speech-to-Text (AssemblyAI)
+- **Live Streaming**: `/api/scribe/token` mints short-lived temporary WebSocket tokens from AssemblyAI, allowing secure browser-direct streaming.
+- **REST Transcription**: Full audio uploads are processed via AssemblyAI Transcriber (`scribe/transcription.py`), returning complete clinical transcripts.
 
-- No live-streaming transcription (full-upload-then-process only).
-- No speaker diarization.
-- No multi-language support (English only).
-- No bundled sample audio files.
-- No automated tests specifically for extraction logic.
+### 3. Real-Time Multilingual Translation
+- Handled by `translate_text()` in `scribe/transcription.py`.
+- Enables multilingual consultations (e.g. Spanish, Hindi, French, German) to be translated live into standardized English for EHR compatibility.
+
+### 4. Human-in-the-Loop Review (Doctor Verification)
+- **Essential Safety Feature**: Extraction is **never** triggered automatically upon speech completion.
+- The physician reviews and edits the transcript directly in the UI.
+- Prevents speech-recognition ambiguities from compounding into erroneous diagnoses or medication records.
+
+### 5. Structured SOAP Extraction (Groq Cloud)
+- Processed by `extract()` in `scribe/extraction.py` using Groq's `openai/gpt-oss-120b`.
+- Governed by the versioned schema prompt in [`scribe/prompts/scribe_extraction.md`](./prompts/scribe_extraction.md).
+- Extracts:
+  - `title`: Short clinical summary title (e.g., "Hypertension & Glycemic Follow-Up").
+  - `summary`: Comprehensive clinical summary.
+  - `diagnoses`: Explicit medical conditions discussed (mapped to `:Disease`).
+  - `action_items`: Clinical follow-ups, lifestyle instructions, and diagnostic orders.
+  - `medications_discussed`: Pharmacotherapies, dosages, and treatment rationales (mapped to `:Medication`).
+
+### 6. Reactive Graph Persistence
+- Saves a `:ConsultationNote` node into Neo4j AuraDB.
+- Automatically establishes:
+  - `(:Patient)-[:HAS_CONSULTATION_NOTE]->(:ConsultationNote)`
+  - `(:ConsultationNote)-[:MENTIONS_DIAGNOSIS]->(:Disease)`
+  - `(:ConsultationNote)-[:DISCUSSES_MEDICATION]->(:Medication)`
+- Newly saved consultations immediately appear in the patient's sub-graph and become queryable via the Clinical Chatbot.
+
+---
+
+## Failure Resilience
+
+- **Retry vs. Manual Entry**: If microphone access is denied or audio transcription fails, physicians are provided an immediate fallback to typed notes.
+- **Session State**: In-memory session tracking (`scribe/session.py`) maintains consultation state with automatic TTL expiration.
+
