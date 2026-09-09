@@ -11,7 +11,7 @@ import {
   Sparkles,
   Users,
 } from 'lucide-react'
-import { runCypher, fetchSectorIntelligence, type SectorIntelligence } from '../lib/api'
+import { fetchSectorGraph, fetchSectorIntelligence, type SectorIntelligence } from '../lib/api'
 import { graphFromCypher } from '../lib/graphData'
 import { LazyFeatureGraph, type FEdge, type FNode } from '../components/feature/LazyFeatureGraph'
 import './SectorViewPage.css'
@@ -38,15 +38,8 @@ export function SectorViewPage() {
     setError(null)
     setDiseaseLabel(null)
 
-    // 1. Fetch cohort graph via Cypher
-    runCypher(
-      `MATCH (d:Disease) WHERE toLower(d.name) = toLower($name)
-       MATCH (p:Patient)-[hd:HAS_DIAGNOSIS]->(d)
-       OPTIONAL MATCH (m:Medication)-[tr:TREATS]->(d)
-       OPTIONAL MATCH (t:Treatment)-[tt:TREATS]->(d)
-       RETURN d, p, m, t, hd, tr, tt LIMIT 120`,
-      { name: diseaseName },
-    )
+    // 1. Fetch cohort graph via the dedicated sector-graph endpoint
+    fetchSectorGraph(diseaseName)
       .then((res) => {
         if (cancelled) return
         if (res.error) {

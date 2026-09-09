@@ -3,6 +3,7 @@ import uuid
 
 from flask import Blueprint, request, jsonify
 
+from backend.auth_utils import require_role
 from backend.neo4j_connection import get_session as neo4j_get_session
 from scribe import session as sess
 from scribe.transcription import translate_text
@@ -10,6 +11,10 @@ from scribe.extraction import extract, ExtractionError
 from scribe.safety import audit_medication
 
 scribe_bp = Blueprint("scribe", __name__)
+
+# Every scribe route is a clinical workflow (note transcription, extraction,
+# medication safety audit) and is therefore restricted to admin + doctor.
+_CLINICAL_ROLES = ("admin", "doctor")
 
 
 def _new_session_id():
@@ -24,6 +29,7 @@ def _start_upload():
 
 
 @scribe_bp.route("/start", methods=["POST"])
+@require_role(*_CLINICAL_ROLES)
 def start_session():
     """Create a new consultation session. Returns a session_id used by all
     subsequent scribe endpoints."""
@@ -31,6 +37,7 @@ def start_session():
 
 
 @scribe_bp.route("/translate", methods=["POST"])
+@require_role(*_CLINICAL_ROLES)
 def live_translate():
     """Translate clinical speech/transcript in real-time into English or another target language."""
     data = request.get_json(silent=True) or {}
@@ -43,6 +50,7 @@ def live_translate():
 
 
 @scribe_bp.route("/transcript/<session_id>", methods=["GET"])
+@require_role(*_CLINICAL_ROLES)
 def get_transcript(session_id):
     """Retrieve current transcript for a session, plus whether it's been approved."""
     transcript, approved = sess.get_transcript(session_id)
@@ -57,6 +65,7 @@ def get_transcript(session_id):
 
 
 @scribe_bp.route("/transcript/<session_id>", methods=["PUT"])
+@require_role(*_CLINICAL_ROLES)
 def edit_transcript(session_id):
     """Store the doctor-edited/approved transcript.
 
@@ -79,6 +88,7 @@ def edit_transcript(session_id):
 
 
 @scribe_bp.route("/extract/<session_id>", methods=["POST"])
+@require_role(*_CLINICAL_ROLES)
 def extract_note(session_id):
     """Trigger Groq extraction against the approved transcript for this session.
 
@@ -123,6 +133,7 @@ def extract_note(session_id):
 
 
 @scribe_bp.route("/audit-medication", methods=["POST"])
+@require_role(*_CLINICAL_ROLES)
 def audit_single_medication():
     """Live audit a single medication for clinical safety, 10x dosage errors, and sound-alikes."""
     data = request.get_json(silent=True) or {}
@@ -164,6 +175,7 @@ def _canonicalize_disease(session, raw_name: str) -> str:
 
 
 @scribe_bp.route("/save/<session_id>", methods=["POST"])
+@require_role(*_CLINICAL_ROLES)
 def save_note(session_id):
     """Persist the structured note into Neo4j as a connected ConsultationNote
     attached to the patient, diagnosed diseases, discussed medications, and attending doctor.
@@ -326,6 +338,7 @@ def save_note(session_id):
 
 
 @scribe_bp.route("/status/<session_id>", methods=["GET"])
+@require_role(*_CLINICAL_ROLES)
 def session_status(session_id):
     """Return current pipeline state: idle, transcribing, review, approved,
     extracting, extracted, extract_error, save_error, saved (or None)."""

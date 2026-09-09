@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { Users, Activity, Pill, FlaskConical, FileText, FolderKanban, TrendingUp, Loader2 } from 'lucide-react'
-import { fetchSchema, runCypher } from '../lib/api'
+import { fetchSchema, fetchRecentNotes, fetchTopSectors, fetchTreatmentTrend } from '../lib/api'
 import { tokenColor } from '../lib/graphColors'
 import './DashboardPage.css'
 
@@ -42,48 +42,19 @@ export function DashboardPage() {
     let cancelled = false
     setLoading(true)
     setError(null)
-    Promise.all([
-      fetchSchema(),
-      runCypher(
-        `MATCH (p:Patient)-[:HAS_CONSULTATION_NOTE]->(n:ConsultationNote)
-         RETURN p.id AS id, p.first_name + ' ' + p.last_name AS name, n.summary AS summary, n.created_at AS created
-         ORDER BY n.created_at DESC LIMIT 6`,
-      ),
-      runCypher(
-        `MATCH (p:Patient)-[:HAS_DIAGNOSIS]->(d:Disease)
-         RETURN d.name AS disease, count(p) AS patients
-         ORDER BY patients DESC LIMIT 8`,
-      ),
-      runCypher(`MATCH (t:Treatment) RETURN t.treatment_date AS d ORDER BY d`),
-    ])
+    Promise.all([fetchSchema(), fetchRecentNotes(), fetchTopSectors(), fetchTreatmentTrend()])
       .then(([sch, notesRes, sectRes, trendRes]) => {
         if (cancelled) return
         setSchema(sch)
-        if (!notesRes.error) {
-          setRecent(
-            notesRes.rows.map((r) => ({
-              id: String(r[0] ?? ''),
-              name: String(r[1] ?? ''),
-              summary: String(r[2] ?? ''),
-              created: String(r[3] ?? ''),
-            })),
-          )
+        setRecent(notesRes)
+        setSectors(sectRes)
+        const byMonth = new Map<string, number>()
+        for (const d of trendRes.dates ?? []) {
+          if (!d) continue
+          const key = d.slice(0, 7)
+          byMonth.set(key, (byMonth.get(key) ?? 0) + 1)
         }
-        if (!sectRes.error) {
-          setSectors(
-            sectRes.rows.map((r) => ({ disease: String(r[0] ?? ''), patients: Number(r[1] ?? 0) })),
-          )
-        }
-        if (!trendRes.error) {
-          const byMonth = new Map<string, number>()
-          for (const r of trendRes.rows) {
-            const d = String(r[0] ?? '')
-            if (!d) continue
-            const key = d.slice(0, 7)
-            byMonth.set(key, (byMonth.get(key) ?? 0) + 1)
-          }
-          setTrend([...byMonth.entries()].sort().map(([month, count]) => ({ month, count })))
-        }
+        setTrend([...byMonth.entries()].sort().map(([month, count]) => ({ month, count })))
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load dashboard')

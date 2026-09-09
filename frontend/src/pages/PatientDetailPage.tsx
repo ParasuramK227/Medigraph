@@ -8,11 +8,14 @@ import { fetchPatient, fetchPatientIntel, type Patient, type PatientIntel } from
 import { fetchPatientGraphRaw, rawGraphToF } from '../lib/graphData'
 import { LazyFeatureGraph, type FEdge, type FNode } from '../components/feature/LazyFeatureGraph'
 import { ScribeWidget } from '../components/scribe/ScribeWidget'
+import { useAuth } from '../hooks/useAuth'
 import { formatClinicalDate, cleanLabName, cleanPersonName } from '../lib/formatters'
 import './PatientDetailPage.css'
 
 export function PatientDetailPage() {
   const { id } = useParams()
+  const { user } = useAuth()
+  const canScribe = user?.role === 'admin' || user?.role === 'doctor'
   const [patient, setPatient] = useState<Patient | null>(null)
   const [intel, setIntel] = useState<PatientIntel | null>(null)
   const [graph, setGraph] = useState<{ nodes: FNode[]; edges: FEdge[] } | null>(null)
@@ -116,9 +119,11 @@ export function PatientDetailPage() {
             </p>
           </section>
 
-          <section className="patient-detail__card patient-detail__scribe">
-            <ScribeWidget patientId={patient.id} patientName={fullName} onNoteSaved={loadData} />
-          </section>
+          {canScribe && (
+            <section className="patient-detail__card patient-detail__scribe">
+              <ScribeWidget patientId={patient.id} patientName={fullName} onNoteSaved={loadData} />
+            </section>
+          )}
 
           <section className="patient-detail__card">
             <h2 className="patient-detail__section-title">

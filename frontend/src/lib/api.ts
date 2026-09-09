@@ -1,4 +1,6 @@
 import { cleanPersonName } from './formatters'
+import { clearAuth, getStoredToken, type AuthUser } from './auth-storage'
+export type { AuthUser } from './auth-storage'
 
 let rawApiBase: string = (import.meta.env.VITE_API_BASE ?? '').trim()
 if (rawApiBase && !rawApiBase.startsWith('http') && !rawApiBase.startsWith('/')) {
@@ -10,6 +12,50 @@ if (rawApiBase && !rawApiBase.startsWith('http') && !rawApiBase.startsWith('/'))
   rawApiBase = 'https://medigraph-backend.onrender.com'
 }
 const API_BASE: string = rawApiBase.replace(/\/+$/, '')
+
+export interface ApiError extends Error {
+  status?: number
+}
+
+let unauthorizedHandler: (() => void) | null = null
+
+/** Register a hook that fires whenever any API call returns 401 (session drop). */
+export function onUnauthorized(cb: () => void): () => void {
+  unauthorizedHandler = cb
+  return () => {
+    if (unauthorizedHandler === cb) unauthorizedHandler = null
+  }
+}
+
+/** Central fetch: injects the Bearer token and handles auth failures globally. */
+export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const token = getStoredToken()
+  const headers = new Headers(init.headers)
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  if (init.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers })
+
+  if (res.status === 401) {
+    clearAuth()
+    unauthorizedHandler?.()
+  }
+
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (body?.error) message = body.error
+    } catch {}
+    const err = new Error(message) as ApiError
+    err.status = res.status
+    throw err
+  }
+
+  return res.json() as Promise<T>
+}
 
 
 
@@ -78,21 +124,17 @@ export interface ScribeStatus {
 // --- Scribe pipeline -------------------------------------------------------
 
 export async function scribeStart(): Promise<{ session_id: string }> {
-  const res = await fetch(`${API_BASE}/api/scribe/start`, { method: 'POST' })
-  if (!res.ok) throw new Error(`Failed to start session: ${res.status}`)
-  return res.json()
+  return apiFetch<{ session_id: string }>('/api/scribe/start', { method: 'POST' })
 }
 
 export async function scribeTranslate(
   text: string,
   targetLang = 'English',
 ): Promise<{ translated_text?: string; original_text?: string; error?: string }> {
-  const res = await fetch(`${API_BASE}/api/scribe/translate`, {
+  return apiFetch('/api/scribe/translate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text, target_lang: targetLang }),
   })
-  return res.json()
 }
 
 export async function scribeGetTranscript(sessionId: string): Promise<{
@@ -100,9 +142,7 @@ export async function scribeGetTranscript(sessionId: string): Promise<{
   approved: boolean
   status: string
 }> {
-  const res = await fetch(`${API_BASE}/api/scribe/transcript/${sessionId}`)
-  if (!res.ok) throw new Error(`No transcript: ${res.status}`)
-  return res.json()
+  return apiFetch(`/api/scribe/transcript/${sessionId}`)
 }
 
 export async function scribeSaveTranscript(
@@ -110,13 +150,10 @@ export async function scribeSaveTranscript(
   transcript: string,
   approved = true,
 ): Promise<{ status: string; approved: boolean }> {
-  const res = await fetch(`${API_BASE}/api/scribe/transcript/${sessionId}`, {
+  return apiFetch(`/api/scribe/transcript/${sessionId}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ transcript, approved }),
   })
-  if (!res.ok) throw new Error(`Failed to save edited transcript: ${res.status}`)
-  return res.json()
 }
 
 export async function scribeExtract(
@@ -125,18 +162,17 @@ export async function scribeExtract(
   doctorName?: string,
   deidentify = true,
 ): Promise<{ status: string; note: ScribeNote; error?: string }> {
-  const res = await fetch(`${API_BASE}/api/scribe/extract/${sessionId}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      patient_name: patientName,
-      doctor_name: doctorName,
-      deidentify,
-    }),
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || `Extraction failed: ${res.status}`)
-  return data as { status: string; note: ScribeNote; error?: string }
+  return apiFetch<{ status: string; note: ScribeNote; error?: string }>(
+    `/api/scribe/extract/${sessionId}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        patient_name: patientName,
+        doctor_name: doctorName,
+        deidentify,
+      }),
+    },
+  )
 }
 
 export async function scribeSave(
@@ -144,14 +180,10 @@ export async function scribeSave(
   patientId: string,
   note: ScribeNote,
 ): Promise<{ status: string; note_id: string }> {
-  const res = await fetch(`${API_BASE}/api/scribe/save/${sessionId}`, {
+  return apiFetch(`/api/scribe/save/${sessionId}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ patient_id: patientId, note }),
   })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || `Failed to save note: ${res.status}`)
-  return data
 }
 
 export async function scribeAuditMedication(med: {
@@ -161,13 +193,10 @@ export async function scribeAuditMedication(med: {
   frequency?: string
   route?: string
 }): Promise<{ medication: typeof med; alerts: SafetyAlert[]; is_safe: boolean }> {
-  const res = await fetch(`${API_BASE}/api/scribe/audit-medication`, {
+  return apiFetch('/api/scribe/audit-medication', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(med),
   })
-  if (!res.ok) throw new Error(`Failed to audit medication: ${res.status}`)
-  return res.json()
 }
 
 export interface Patient {
@@ -211,18 +240,18 @@ function toPatient(raw: RawNode): Patient {
 // --- Patients --------------------------------------------------------------
 
 export async function fetchPatients(): Promise<Patient[]> {
-  const res = await fetch(`${API_BASE}/api/graph/patients`)
-  if (!res.ok) throw new Error(`Failed to fetch patients: ${res.status}`)
-  const data = (await res.json()) as RawNode[]
+  const data = await apiFetch<RawNode[]>('/api/graph/patients')
   return Array.isArray(data) ? data.map(toPatient) : []
 }
 
 export async function fetchPatient(id: string): Promise<Patient | null> {
-  const res = await fetch(`${API_BASE}/api/graph/patients/${id}`)
-  if (res.status === 404) return null
-  if (!res.ok) throw new Error(`Failed to fetch patient: ${res.status}`)
-  const data = (await res.json()) as { patient?: RawNode } | null
-  return data?.patient ? toPatient(data.patient) : null
+  try {
+    const data = await apiFetch<{ patient?: RawNode } | null>(`/api/graph/patients/${id}`)
+    return data?.patient ? toPatient(data.patient) : null
+  } catch (e) {
+    if ((e as ApiError).status === 404) return null
+    throw e
+  }
 }
 
 // --- Patient intelligence + treatment intel ----------------------------
@@ -280,10 +309,12 @@ export interface PatientIntel {
 }
 
 export async function fetchPatientIntel(id: string): Promise<PatientIntel | null> {
-  const res = await fetch(`${API_BASE}/api/graph/patients/${id}/intelligence`)
-  if (res.status === 404) return null
-  if (!res.ok) throw new Error(`Failed to fetch patient intelligence: ${res.status}`)
-  return (await res.json()) as PatientIntel
+  try {
+    return await apiFetch<PatientIntel>(`/api/graph/patients/${id}/intelligence`)
+  } catch (e) {
+    if ((e as ApiError).status === 404) return null
+    throw e
+  }
 }
 
 export interface RankedDiagnosis {
@@ -330,10 +361,12 @@ export interface TreatmentIntel {
 }
 
 export async function fetchTreatmentIntel(id: string): Promise<TreatmentIntel | null> {
-  const res = await fetch(`${API_BASE}/api/graph/patients/${id}/treatment-intel`)
-  if (res.status === 404) return null
-  if (!res.ok) throw new Error(`Failed to fetch treatment intelligence: ${res.status}`)
-  return (await res.json()) as TreatmentIntel
+  try {
+    return await apiFetch<TreatmentIntel>(`/api/graph/patients/${id}/treatment-intel`)
+  } catch (e) {
+    if ((e as ApiError).status === 404) return null
+    throw e
+  }
 }
 
 export async function fetchAllTreatmentIntel(): Promise<TreatmentIntel[]> {
@@ -385,10 +418,12 @@ export interface SectorIntelligence {
 
 export async function fetchSectorIntelligence(diseaseName: string): Promise<SectorIntelligence | null> {
   const encoded = encodeURIComponent(diseaseName)
-  const res = await fetch(`${API_BASE}/api/graph/sectors/${encoded}/intelligence`)
-  if (res.status === 404) return null
-  if (!res.ok) throw new Error(`Failed to fetch sector intelligence: ${res.status}`)
-  return (await res.json()) as SectorIntelligence
+  try {
+    return await apiFetch<SectorIntelligence>(`/api/graph/sectors/${encoded}/intelligence`)
+  } catch (e) {
+    if ((e as ApiError).status === 404) return null
+    throw e
+  }
 }
 
 
@@ -412,9 +447,7 @@ export interface GraphSchema {
 }
 
 export async function fetchSchema(): Promise<GraphSchema> {
-  const res = await fetch(`${API_BASE}/api/graph/schema`)
-  if (!res.ok) throw new Error(`Failed to fetch schema: ${res.status}`)
-  return res.json()
+  return apiFetch<GraphSchema>('/api/graph/schema')
 }
 
 export interface CypherResult {
@@ -426,13 +459,18 @@ export interface CypherResult {
 }
 
 export async function runCypher(query: string, params: Record<string, unknown> = {}): Promise<CypherResult> {
-  const res = await fetch(`${API_BASE}/api/graph/cypher`, {
+  return apiFetch<CypherResult>('/api/graph/cypher', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, params }),
   })
-  const data = (await res.json()) as CypherResult
-  return data
+}
+
+/** Run one of the server-authored graph presets (admin + researcher). */
+export async function exploreGraph(preset: string): Promise<CypherResult> {
+  return apiFetch<CypherResult>('/api/graph/explore', {
+    method: 'POST',
+    body: JSON.stringify({ preset }),
+  })
 }
 
 // --- Chatbot --------------------------------------------------------------
@@ -452,11 +490,9 @@ export interface SuggestionsResponse {
 
 export async function fetchChatSuggestions(patientId?: string): Promise<SuggestionsResponse> {
   const url = patientId
-    ? `${API_BASE}/api/chat/suggestions?patient_id=${encodeURIComponent(patientId)}`
-    : `${API_BASE}/api/chat/suggestions`
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`Failed to fetch chat suggestions: ${res.status}`)
-  return (await res.json()) as SuggestionsResponse
+    ? `/api/chat/suggestions?patient_id=${encodeURIComponent(patientId)}`
+    : '/api/chat/suggestions'
+  return apiFetch<SuggestionsResponse>(url)
 }
 
 export interface ChatResponse {
@@ -470,11 +506,116 @@ export async function chatQuery(
   message: string,
   patientId?: string,
 ): Promise<ChatResponse> {
-  const res = await fetch(`${API_BASE}/api/chat/query`, {
+  try {
+    return await apiFetch<ChatResponse>('/api/chat/query', {
+      method: 'POST',
+      body: JSON.stringify({ message, patient_id: patientId }),
+    })
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : 'Chatbot request failed' }
+  }
+}
+
+// --- Auth -------------------------------------------------------------------
+
+export interface LoginResponse {
+  token: string
+  user: AuthUser
+}
+
+export async function login(
+  usernameOrEmail: string,
+  password: string,
+): Promise<LoginResponse> {
+  return apiFetch<LoginResponse>('/api/auth/login', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, patient_id: patientId }),
+    body: JSON.stringify({ username: usernameOrEmail, password }),
   })
-  return (await res.json()) as ChatResponse
+}
+
+export async function register(
+  username: string,
+  email: string,
+  password: string,
+): Promise<LoginResponse> {
+  return apiFetch<LoginResponse>('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ username, email, password }),
+  })
+}
+
+export async function fetchMe(): Promise<AuthUser> {
+  return apiFetch<AuthUser>('/api/auth/me')
+}
+
+export async function listUsers(): Promise<AuthUser[]> {
+  return apiFetch<AuthUser[]>('/api/auth/users')
+}
+
+export async function setUserRole(userId: string, role: string): Promise<AuthUser> {
+  return apiFetch<AuthUser>(`/api/auth/users/${encodeURIComponent(userId)}/role`, {
+    method: 'PUT',
+    body: JSON.stringify({ role }),
+  })
+}
+
+// --- Dedicated data endpoints (replace raw/Cypher-dependent pages) -----------
+
+export interface SectorRow {
+  name: string
+  patients: number
+  medications: number
+}
+
+export async function fetchSectors(): Promise<SectorRow[]> {
+  const data = await apiFetch<SectorRow[]>('/api/graph/sectors')
+  return Array.isArray(data) ? data : []
+}
+
+export async function fetchSectorGraph(diseaseName: string): Promise<CypherResult> {
+  const encoded = encodeURIComponent(diseaseName)
+  return apiFetch<CypherResult>(`/api/graph/sectors/${encoded}/graph`)
+}
+
+export interface PatientSummary {
+  id: string
+  diagnoses: string[]
+  treatmentCount: number
+  labCount: number
+}
+
+export async function fetchPatientSummaries(): Promise<PatientSummary[]> {
+  const data = await apiFetch<PatientSummary[]>('/api/graph/patient-summaries')
+  return Array.isArray(data) ? data : []
+}
+
+export interface RecentNote {
+  id: string
+  name: string
+  summary: string
+  created: string
+}
+
+export async function fetchRecentNotes(): Promise<RecentNote[]> {
+  const data = await apiFetch<RecentNote[]>('/api/graph/dashboard/recent-notes')
+  return Array.isArray(data) ? data : []
+}
+
+export interface TopSectorRow {
+  disease: string
+  patients: number
+}
+
+export async function fetchTopSectors(): Promise<TopSectorRow[]> {
+  const data = await apiFetch<TopSectorRow[]>('/api/graph/dashboard/top-sectors')
+  return Array.isArray(data) ? data : []
+}
+
+export interface TreatmentTrend {
+  dates: string[]
+}
+
+export async function fetchTreatmentTrend(): Promise<TreatmentTrend> {
+  return apiFetch<TreatmentTrend>('/api/graph/dashboard/treatment-trend')
 }
 

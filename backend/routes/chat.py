@@ -4,6 +4,7 @@ import requests
 from dotenv import load_dotenv
 from flask import Blueprint, request, jsonify
 
+from backend.auth_utils import require_auth
 from backend.neo4j_connection import get_session as neo4j_get_session
 
 load_dotenv()
@@ -188,6 +189,7 @@ def _build_context_text(profile: dict | None, cohort: dict | None) -> str:
 
 
 @chat_bp.route("/suggestions", methods=["GET"])
+@require_auth
 def chat_suggestions():
     """Return smart, dynamic demo questions based on selected patient or cohort data."""
     patient_id = request.args.get("patient_id")
@@ -265,6 +267,7 @@ def chat_suggestions():
 
 
 @chat_bp.route("/query", methods=["POST"])
+@require_auth
 def chat_query():
     """Accept a natural-language clinical question grounded in the Neo4j knowledge graph."""
     data = request.get_json(silent=True) or {}

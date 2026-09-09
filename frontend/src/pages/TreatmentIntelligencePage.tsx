@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { HeartPulse, Loader2, Activity, ArrowRight } from 'lucide-react'
-import { fetchPatients, runCypher, type Patient } from '../lib/api'
+import { fetchPatients, fetchPatientSummaries, type Patient } from '../lib/api'
 import './TreatmentIntelligencePage.css'
 
 interface PatientWithDiags extends Patient {
@@ -20,30 +20,16 @@ export function TreatmentIntelligencePage() {
     setLoading(true)
     setError(null)
 
-    Promise.all([
-      fetchPatients(),
-      runCypher(
-        `MATCH (p:Patient)
-         OPTIONAL MATCH (p)-[:HAS_DIAGNOSIS]->(d:Disease)
-         OPTIONAL MATCH (p)-[:RECEIVED_TREATMENT]->(t:Treatment)
-         OPTIONAL MATCH (p)-[:HAS_LAB_TEST]->(l:LabTest)
-         RETURN p.id AS id, collect(DISTINCT d.name) AS diagnoses,
-                count(DISTINCT t) AS treatmentCount, count(DISTINCT l) AS labCount`,
-      ),
-    ])
-      .then(([patientList, cypherRes]) => {
+    Promise.all([fetchPatients(), fetchPatientSummaries()])
+      .then(([patientList, summaries]) => {
         if (cancelled) return
         const diagMap = new Map<string, { diagnoses: string[]; treatmentCount: number; labCount: number }>()
-        if (!cypherRes.error) {
-          for (const row of cypherRes.rows) {
-            const id = String(row[0])
-            const diagnoses = (row[1] as string[] | null) ?? []
-            diagMap.set(id, {
-              diagnoses: diagnoses.filter(Boolean),
-              treatmentCount: Number(row[2]) || 0,
-              labCount: Number(row[3]) || 0,
-            })
-          }
+        for (const s of summaries) {
+          diagMap.set(s.id, {
+            diagnoses: (s.diagnoses ?? []).filter(Boolean),
+            treatmentCount: Number(s.treatmentCount) || 0,
+            labCount: Number(s.labCount) || 0,
+          })
         }
         setPatients(
           patientList.map((p) => ({
