@@ -9,7 +9,6 @@ from backend.neo4j_connection import get_session as neo4j_get_session
 from scribe import session as sess
 from scribe.transcription import (
     transcribe,
-    create_realtime_token,
     translate_text,
     TranscriptionError,
 )
@@ -39,14 +38,8 @@ def start_session():
 
 @scribe_bp.route("/token", methods=["GET"])
 def get_realtime_token():
-    """Mint a temporary WebSocket token from AssemblyAI for live in-browser streaming."""
-    try:
-        token = create_realtime_token()
-        return jsonify({"token": token})
-    except TranscriptionError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": f"Failed to generate AssemblyAI token: {e}"}), 500
+    """Free client-side token endpoint (Web Speech API / Local Whisper)."""
+    return jsonify({"token": "free_client_mode", "provider": "webspeech"})
 
 
 @scribe_bp.route("/translate", methods=["POST"])
@@ -268,6 +261,23 @@ def save_note(session_id):
     meds = note.get("medications_discussed", []) or []
     note_id = "CN-" + str(uuid.uuid4())[:8]
 
+    # Convert meds to a list of primitive strings for the ConsultationNote node property
+    meds_summary_strings = []
+    for m in meds:
+        if isinstance(m, dict):
+            name = str(m.get("name") or "").strip()
+            dose = str(m.get("dosage") or "").strip()
+            unit = str(m.get("unit") or "").strip()
+            freq = str(m.get("frequency") or "").strip()
+            parts = [name]
+            if dose:
+                parts.append(f"{dose}{unit}")
+            if freq:
+                parts.append(freq)
+            meds_summary_strings.append(" ".join(parts).strip())
+        elif isinstance(m, str) and m.strip():
+            meds_summary_strings.append(m.strip())
+
     if not title:
         if diagnoses and len(diagnoses) > 0:
             title = f"{str(diagnoses[0]).title()} Consultation"
@@ -303,7 +313,7 @@ def save_note(session_id):
                 summary=summary,
                 diagnoses=diagnoses,
                 action_items=action_items,
-                meds=meds,
+                meds=meds_summary_strings,
             )
 
             # 2. Canonicalize and link Diagnoses: (p)-[:HAS_DIAGNOSIS]->(d), (n)-[:MENTIONS_DIAGNOSIS]->(d)
