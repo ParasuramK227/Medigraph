@@ -116,6 +116,10 @@ export function PatientDetailPage() {
             </p>
           </section>
 
+          <section className="patient-detail__card patient-detail__scribe">
+            <ScribeWidget patientId={patient.id} onNoteSaved={loadData} />
+          </section>
+
           <section className="patient-detail__card">
             <h2 className="patient-detail__section-title">
               <ClipboardList size={16} /> Medical history
@@ -296,10 +300,6 @@ export function PatientDetailPage() {
           </section>
         </div>
       </div>
-
-      <section className="patient-detail__card patient-detail__scribe">
-        <ScribeWidget patientId={patient.id} onNoteSaved={loadData} />
-      </section>
 
       {graph && (
         <section className="patient-detail__card patient-detail__card--graph">
