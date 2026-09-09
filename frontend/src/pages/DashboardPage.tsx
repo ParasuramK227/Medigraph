@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { Users, Activity, Pill, FlaskConical, FileText, FolderKanban, TrendingUp, Loader2 } from 'lucide-react'
 import { fetchSchema, runCypher } from '../lib/api'
-import { chipTextContrast, tokenColor } from '../lib/graphColors'
+import { tokenColor } from '../lib/graphColors'
 import './DashboardPage.css'
 
 interface RecentNote {
@@ -23,11 +23,11 @@ interface TrendPoint {
 }
 
 const statCards = [
-  { label: 'Total Patients', key: 'Patient', icon: Users, colorToken: '--node-patient' },
-  { label: 'Diseases', key: 'Disease', icon: Activity, colorToken: '--node-disease' },
-  { label: 'Medications', key: 'Medication', icon: Pill, colorToken: '--node-medication' },
-  { label: 'Treatments', key: 'Treatment', icon: FlaskConical, colorToken: '--node-treatment' },
-  { label: 'Consultations', key: 'ConsultationNote', icon: FileText, colorToken: '--node-note' },
+  { label: 'Total Patients', key: 'Patient', icon: Users },
+  { label: 'Diseases', key: 'Disease', icon: Activity },
+  { label: 'Medications', key: 'Medication', icon: Pill },
+  { label: 'Treatments', key: 'Treatment', icon: FlaskConical },
+  { label: 'Consultations', key: 'ConsultationNote', icon: FileText },
 ] as const
 
 export function DashboardPage() {
@@ -112,8 +112,8 @@ export function DashboardPage() {
           <div className="dashboard-stats">
             {statCards.map((card) => {
               const live = schema.labels.find((l) => l.label === card.key)?.count ?? 0
-              const color = tokenColor(card.colorToken)
-              const contrast = chipTextContrast(color) === 'light' ? '#ffffff' : '#111111'
+              const color = tokenColor('--color-text')
+              const contrast = tokenColor('--color-bg')
               return (
                 <div
                   className="stat-card"
