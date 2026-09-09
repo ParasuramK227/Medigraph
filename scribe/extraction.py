@@ -5,9 +5,12 @@ import re
 import requests
 from dotenv import load_dotenv
 
+from scribe.privacy import redact_phi, rehydrate_phi
+from scribe.safety import audit_extracted_note
+
 load_dotenv()
 
-_MODEL = "openai/gpt-oss-120b"
+_MODEL = os.environ.get("GROQ_EXTRACTION_MODEL", "openai/gpt-oss-120b")
 
 _SCHEMA_KEYS = ("summary", "diagnoses", "action_items", "medications_discussed")
 
@@ -106,29 +109,49 @@ def _validate(data):
     if not title or not isinstance(title, str) or not title.strip():
         # Fallback title if LLM omitted it
         if data["diagnoses"] and len(data["diagnoses"]) > 0:
-            title = f"{data['diagnoses'][0].title()} Consultation"
+            first_d = data["diagnoses"][0]
+            d_name = first_d.get("name", str(first_d)) if isinstance(first_d, dict) else str(first_d)
+            title = f"{d_name.title()} Consultation"
         else:
             title = "Clinical Consultation Note"
+
+    # Normalize medications discussed to ensure uniform object representation
+    normalized_meds = []
+    for item in data["medications_discussed"]:
+        if isinstance(item, dict):
+            normalized_meds.append(item)
+        elif isinstance(item, str) and item.strip():
+            normalized_meds.append({"name": item.strip()})
 
     return {
         "title": title.strip(),
         "summary": data["summary"],
         "diagnoses": data["diagnoses"],
         "action_items": data["action_items"],
-        "medications_discussed": data["medications_discussed"],
+        "medications_discussed": normalized_meds,
     }
 
 
-def extract(transcript):
+def extract(transcript, patient_name=None, doctor_name=None, deidentify=True):
     """Send an approved transcript to Groq and return a validated structured note.
 
-    Uses the versioned prompt in /scribe/prompts/scribe_extraction.md.
+    Applies local HIPAA Safe Harbor PHI scrubbing before calling Groq, rehydrates
+    local tokens, and executes clinical safety bounds validation on dosages.
     """
     api_key = os.environ.get("GROQ_API_KEY_EXTRACTION") or os.environ.get("GROQ_API_KEY")
     if not api_key:
         raise ExtractionError("GROQ_API_KEY_EXTRACTION not configured.")
 
-    system_prompt, user_prompt = _build_prompt(transcript)
+    token_map = {}
+    prompt_transcript = transcript
+    if deidentify:
+        prompt_transcript, token_map = redact_phi(
+            transcript,
+            patient_name=patient_name,
+            doctor_name=doctor_name,
+        )
+
+    system_prompt, user_prompt = _build_prompt(prompt_transcript)
 
     resp = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -151,4 +174,15 @@ def extract(transcript):
         raise ExtractionError(f"Groq API returned status {resp.status_code}: {resp.text}")
 
     content = resp.json()["choices"][0]["message"]["content"]
-    return _validate(_extract_json(content))
+    parsed_note = _validate(_extract_json(content))
+
+    # Rehydrate local tokens if de-identification was used
+    if token_map:
+        parsed_note = rehydrate_phi(parsed_note, token_map)
+
+    # Perform clinical dosage & sound-alike audit
+    audited_note, safety_alerts = audit_extracted_note(parsed_note)
+    audited_note["safety_alerts"] = safety_alerts
+    audited_note["deidentified"] = deidentify
+
+    return audited_note

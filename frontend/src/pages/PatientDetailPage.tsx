@@ -298,7 +298,11 @@ export function PatientDetailPage() {
       </div>
 
       <section className="patient-detail__card patient-detail__scribe">
-        <ScribeWidget patientId={patient.id} onNoteSaved={loadData} />
+        <ScribeWidget
+          patientId={patient.id}
+          patientName={`${patient.first_name} ${patient.last_name}`.trim()}
+          onNoteSaved={loadData}
+        />
       </section>
 
       {graph && (

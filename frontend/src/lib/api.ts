@@ -28,11 +28,36 @@ export async function fetchHealth(): Promise<HealthStatus> {
   }
 }
 
+export interface StructuredMedication {
+  name: string
+  dosage?: string
+  unit?: string
+  frequency?: string
+  route?: string
+  rationale?: string
+  safety_alerts?: SafetyAlert[]
+}
+
+export interface SafetyAlert {
+  type: string
+  severity: 'WARNING' | 'CRITICAL' | 'INFO'
+  message: string
+  medication: string
+  quick_fix?: {
+    dosage: string
+    unit: string
+    reason: string
+  }
+}
+
 export interface ScribeNote {
+  title?: string
   summary: string
   diagnoses: string[]
   action_items: string[]
-  medications_discussed: string[]
+  medications_discussed: Array<string | StructuredMedication>
+  safety_alerts?: SafetyAlert[]
+  deidentified?: boolean
 }
 
 export interface ScribeStatus {
@@ -59,8 +84,8 @@ export async function scribeStart(): Promise<{ session_id: string }> {
 }
 
 export async function scribeGetToken(): Promise<{ token?: string; error?: string }> {
-  const res = await fetch(`${API_BASE}/api/scribe/token`)
-  return res.json()
+  // Free / local client mode
+  return { token: 'free_client_mode' }
 }
 
 export async function scribeTranslate(
@@ -77,8 +102,9 @@ export async function scribeTranslate(
 
 export interface UploadResult {
   session_id: string
-  transcript?: string
+  transcript: string
   status?: string
+  provider?: string
   error?: string
   failure_count?: number
   retry_disabled?: boolean
@@ -87,13 +113,23 @@ export interface UploadResult {
 export async function scribeUpload(
   sessionId: string,
   audioBlob: Blob,
-  filename = 'recording.webm',
+  provider: 'groq' | 'hf_space' = 'groq',
+  hfEndpoint?: string,
 ): Promise<UploadResult> {
   const form = new FormData()
   form.append('session_id', sessionId)
-  form.append('audio', audioBlob, filename)
+  form.append('audio', audioBlob, 'recording.webm')
+  form.append('provider', provider)
+  if (hfEndpoint) {
+    form.append('hf_endpoint', hfEndpoint)
+  }
+
   const res = await fetch(`${API_BASE}/api/scribe/upload`, { method: 'POST', body: form })
-  return (await res.json()) as UploadResult
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(data.error || `Upload failed: ${res.status}`)
+  }
+  return data as UploadResult
 }
 
 export async function scribeGetTranscript(sessionId: string): Promise<{
@@ -122,9 +158,22 @@ export async function scribeSaveTranscript(
 
 export async function scribeExtract(
   sessionId: string,
-): Promise<{ status: string; note?: ScribeNote; error?: string }> {
-  const res = await fetch(`${API_BASE}/api/scribe/extract/${sessionId}`, { method: 'POST' })
-  return (await res.json()) as { status: string; note?: ScribeNote; error?: string }
+  patientName?: string,
+  doctorName?: string,
+  deidentify = true,
+): Promise<{ status: string; note: ScribeNote; error?: string }> {
+  const res = await fetch(`${API_BASE}/api/scribe/extract/${sessionId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      patient_name: patientName,
+      doctor_name: doctorName,
+      deidentify,
+    }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || `Extraction failed: ${res.status}`)
+  return data as { status: string; note: ScribeNote; error?: string }
 }
 
 export async function scribeSave(
@@ -140,6 +189,22 @@ export async function scribeSave(
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error || `Failed to save note: ${res.status}`)
   return data
+}
+
+export async function scribeAuditMedication(med: {
+  name: string
+  dosage?: string
+  unit?: string
+  frequency?: string
+  route?: string
+}): Promise<{ medication: typeof med; alerts: SafetyAlert[]; is_safe: boolean }> {
+  const res = await fetch(`${API_BASE}/api/scribe/audit-medication`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(med),
+  })
+  if (!res.ok) throw new Error(`Failed to audit medication: ${res.status}`)
+  return res.json()
 }
 
 export interface Patient {
@@ -449,3 +514,4 @@ export async function chatQuery(
   })
   return (await res.json()) as ChatResponse
 }
+

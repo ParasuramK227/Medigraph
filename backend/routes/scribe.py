@@ -14,6 +14,7 @@ from scribe.transcription import (
     TranscriptionError,
 )
 from scribe.extraction import extract, ExtractionError
+from scribe.safety import audit_medication
 
 scribe_bp = Blueprint("scribe", __name__)
 
@@ -73,6 +74,9 @@ def upload_audio():
     if not session_id:
         return jsonify({"error": "missing session_id"}), 400
 
+    provider = request.form.get("provider", "groq")
+    hf_endpoint = request.form.get("hf_endpoint")
+
     file = request.files.get("audio")
     if not file:
         file = request.files.get("file")
@@ -92,7 +96,7 @@ def upload_audio():
             file.save(tmp.name)
             tmp_path = tmp.name
 
-        transcript = transcribe(tmp_path)
+        transcript = transcribe(tmp_path, provider=provider, hf_endpoint=hf_endpoint)
 
         # Success — reset failure counter, store transcript for doctor review.
         sess.set_transcript(session_id, transcript, approved=False)
@@ -102,6 +106,7 @@ def upload_audio():
             "session_id": session_id,
             "transcript": transcript,
             "status": "review",
+            "provider": provider,
         })
     except TranscriptionError as e:
         failures = sess.record_failure(session_id)
@@ -164,6 +169,8 @@ def extract_note(session_id):
 
     Returns 409 if no transcript exists yet, or 400 if the transcript has not
     been explicitly approved — extraction NEVER runs on an unreviewed transcript.
+    Applies local HIPAA Safe Harbor de-identification before sending out and
+    runs clinical dosage safety audits on extracted items.
     """
     transcript, approved = sess.get_transcript(session_id)
     if transcript is None:
@@ -171,9 +178,19 @@ def extract_note(session_id):
     if not approved:
         return jsonify({"error": "transcript not approved; doctor must approve before extraction"}), 400
 
+    data = request.get_json(silent=True) or {}
+    patient_name = data.get("patient_name")
+    doctor_name = data.get("doctor_name")
+    deidentify = data.get("deidentify", True)
+
     sess.set_state(session_id, "extracting")
     try:
-        note = extract(transcript)
+        note = extract(
+            transcript,
+            patient_name=patient_name,
+            doctor_name=doctor_name,
+            deidentify=deidentify,
+        )
         # Note is staged in the session store until the doctor confirms save.
         sess.set_state(session_id, "extracted")
         return jsonify({
@@ -184,6 +201,24 @@ def extract_note(session_id):
     except ExtractionError as e:
         sess.set_state(session_id, "extract_error")
         return jsonify({"error": str(e), "status": "extract_error"}), 502
+
+
+@scribe_bp.route("/audit-medication", methods=["POST"])
+def audit_single_medication():
+    """Live audit a single medication for clinical safety, 10x dosage errors, and sound-alikes."""
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "")
+    dosage = data.get("dosage")
+    unit = data.get("unit")
+    frequency = data.get("frequency")
+    route = data.get("route")
+
+    alerts = audit_medication(name=name, dosage=dosage, unit=unit, frequency=frequency, route=route)
+    return jsonify({
+        "medication": {"name": name, "dosage": dosage, "unit": unit, "frequency": frequency, "route": route},
+        "alerts": alerts,
+        "is_safe": len(alerts) == 0,
+    })
 
 
 def _clean_med_name(raw: str) -> str:
@@ -291,24 +326,49 @@ def save_note(session_id):
                     d_name=can_name,
                 )
 
-            # 3. Clean and link Medications: (n)-[:DISCUSSES_MEDICATION]->(m), (m)-[:TREATS]->(d)
+            # 3. Clean and link Medications: (n)-[:DISCUSSES_MEDICATION]->(med), (p)-[:PRESCRIBED]->(med), (med)-[:TREATS]->(disease)
             for m in meds:
-                raw_m = m.get("name") if isinstance(m, dict) else str(m)
+                if isinstance(m, dict):
+                    raw_m = m.get("name", "")
+                    dosage = m.get("dosage")
+                    unit = m.get("unit")
+                    freq = m.get("frequency")
+                    route = m.get("route")
+                    rationale = m.get("rationale")
+                else:
+                    raw_m = str(m)
+                    dosage, unit, freq, route, rationale = None, None, None, None, None
+
                 clean_m = _clean_med_name(raw_m)
                 if not clean_m:
                     continue
+
                 s.run(
                     """
                     MATCH (n:ConsultationNote {id: $note_id})
+                    MATCH (p:Patient {id: $patient_id})
                     MERGE (med:Medication {name: $m_name})
-                    MERGE (n)-[:DISCUSSES_MEDICATION]->(med)
+                    MERGE (n)-[dm:DISCUSSES_MEDICATION]->(med)
+                    SET dm.dosage = $dosage, dm.unit = $unit, dm.frequency = $freq, dm.route = $route, dm.rationale = $rationale
+                    MERGE (p)-[pr:PRESCRIBED]->(med)
+                    SET pr.dosage = coalesce($dosage, pr.dosage),
+                        pr.unit = coalesce($unit, pr.unit),
+                        pr.frequency = coalesce($freq, pr.frequency),
+                        pr.route = coalesce($route, pr.route),
+                        pr.status = 'Active'
                     WITH med
                     UNWIND $diseases AS d_name
                     MATCH (disease:Disease {name: d_name})
                     MERGE (med)-[:TREATS]->(disease)
                     """,
                     note_id=note_id,
+                    patient_id=patient_id,
                     m_name=clean_m,
+                    dosage=dosage,
+                    unit=unit,
+                    freq=freq,
+                    route=route,
+                    rationale=rationale,
                     diseases=canonical_diseases,
                 )
 

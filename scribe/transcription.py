@@ -5,56 +5,104 @@ from dotenv import load_dotenv
 load_dotenv()
 
 _TRANSLATION_MODEL = "openai/gpt-oss-120b"
+_GROQ_WHISPER_MODEL = "whisper-large-v3-turbo"
 
 
 class TranscriptionError(Exception):
-    """Raised when transcription or token minting fails."""
+    """Raised when audio transcription or translation fails."""
 
 
-def get_api_key():
-    key = os.environ.get("ASSEMBLYAI_API_KEY")
-    if not key:
-        raise TranscriptionError("ASSEMBLYAI_API_KEY is not configured in .env.")
-    return key
+def transcribe_groq(audio_file_path: str) -> str:
+    """Transcribe an audio file using Groq's high-speed Whisper Large v3 Turbo free tier."""
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise TranscriptionError("GROQ_API_KEY is not configured in .env.")
 
+    if not os.path.exists(audio_file_path):
+        raise TranscriptionError(f"Audio file not found: {audio_file_path}")
 
-def create_realtime_token(expires_in=480):
-    """Generate a temporary WebSocket token from AssemblyAI for live in-browser streaming."""
-    api_key = get_api_key()
+    filename = os.path.basename(audio_file_path)
+    # Determine basic mime type
+    suffix = os.path.splitext(filename)[1].lower()
+    mime_map = {
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".webm": "audio/webm",
+        ".m4a": "audio/mp4",
+        ".ogg": "audio/ogg",
+        ".flac": "audio/flac",
+    }
+    content_type = mime_map.get(suffix, "audio/wav")
+
     try:
-        from assemblyai.streaming.v3 import StreamingClient, StreamingClientOptions
+        with open(audio_file_path, "rb") as f:
+            files = {"file": (filename, f, content_type)}
+            data = {
+                "model": _GROQ_WHISPER_MODEL,
+                "temperature": "0",
+                "response_format": "json",
+            }
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                files=files,
+                data=data,
+                timeout=45,
+            )
 
-        client = StreamingClient(StreamingClientOptions(api_key=api_key))
-        token = client.create_temporary_token(expires_in_seconds=expires_in)
-        if not token:
-            raise TranscriptionError("AssemblyAI response missing temporary token.")
-        return token
-    except Exception as e:
-        if isinstance(e, TranscriptionError):
-            raise
-        raise TranscriptionError(f"Failed to generate AssemblyAI token: {e}")
+        if resp.status_code != 200:
+            raise TranscriptionError(f"Groq Whisper transcription failed ({resp.status_code}): {resp.text}")
 
-
-def transcribe(audio_file_path):
-    """Transcribe an audio file via AssemblyAI REST API."""
-    api_key = get_api_key()
-    try:
-        import assemblyai as aai
-        aai.settings.api_key = api_key
-        transcriber = aai.Transcriber()
-        transcript = transcriber.transcribe(audio_file_path)
-
-        if transcript.status == aai.TranscriptStatus.error:
-            raise TranscriptionError(f"AssemblyAI transcription error: {transcript.error}")
-
-        text = (transcript.text or "").strip()
+        result = resp.json()
+        text = (result.get("text") or "").strip()
         if not text:
-            raise TranscriptionError("AssemblyAI produced no transcript (silence or unreadable audio).")
+            raise TranscriptionError("Whisper returned empty transcript (silence or inaudible audio).")
         return text
     except Exception as e:
         if isinstance(e, TranscriptionError):
             raise
-        raise TranscriptionError(f"AssemblyAI transcription failed: {e}")
+        raise TranscriptionError(f"Groq Whisper error: {e}")
+
+
+def transcribe_hf_space(audio_file_path: str, endpoint: str | None = None) -> str:
+    """Transcribe an audio file using a Hugging Face Space running faster-whisper."""
+    hf_url = endpoint or os.environ.get("HF_WHISPER_ENDPOINT")
+    if not hf_url:
+        raise TranscriptionError(
+            "HF_WHISPER_ENDPOINT is not configured in .env. "
+            "Please deploy the hf_space/ app to Hugging Face Spaces or use Groq Whisper."
+        )
+
+    # Ensure /transcribe endpoint path
+    if not hf_url.rstrip("/").endswith("/transcribe"):
+        hf_url = hf_url.rstrip("/") + "/transcribe"
+
+    filename = os.path.basename(audio_file_path)
+    try:
+        with open(audio_file_path, "rb") as f:
+            files = {"file": (filename, f, "audio/wav")}
+            resp = requests.post(hf_url, files=files, timeout=60)
+
+        if resp.status_code != 200:
+            raise TranscriptionError(f"Hugging Face Space returned status {resp.status_code}: {resp.text}")
+
+        data = resp.json()
+        text = (data.get("transcript") or "").strip()
+        if not text:
+            raise TranscriptionError("Hugging Face Space returned empty transcript.")
+        return text
+    except Exception as e:
+        if isinstance(e, TranscriptionError):
+            raise
+        raise TranscriptionError(f"Hugging Face Space transcription error: {e}")
+
+
+def transcribe(audio_file_path: str, provider: str = "groq", hf_endpoint: str | None = None) -> str:
+    """Transcribe an audio file using the specified free provider (groq or hf_space)."""
+    clean_provider = provider.lower().strip()
+    if clean_provider == "hf_space":
+        return transcribe_hf_space(audio_file_path, endpoint=hf_endpoint)
+    return transcribe_groq(audio_file_path)
 
 
 def translate_text(text, target_lang="English"):
