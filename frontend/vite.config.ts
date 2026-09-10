@@ -13,6 +13,7 @@ export default defineConfig({
       // (SharedArrayBuffer). The matching prod headers live in render.yaml.
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Resource-Policy': 'cross-origin',
     },
     proxy: {
       // Proxy API calls to the Flask backend during dev to avoid CORS friction.

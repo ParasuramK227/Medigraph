@@ -285,7 +285,15 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
         setRecordingSeconds((s) => s + 1)
       }, 1000)
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to start Moonshine. Please allow microphone access.')
+      console.error('[Moonshine Start Error]', err)
+      const msg = err?.message || ''
+      if (err?.name === 'NotAllowedError' || msg.includes('Permission') || msg.includes('permission')) {
+        setErrorMsg('Microphone access was blocked. Please grant microphone permission in your browser address bar.')
+      } else if (msg.includes('streaming config JSON') || msg === 'Unknown error') {
+        setErrorMsg('Moonshine cache was cleaned. Please click "Start Dictation" again to start recording.')
+      } else {
+        setErrorMsg(msg || 'Failed to start Moonshine. Please ensure microphone access is permitted.')
+      }
       setStage('idle')
     }
   }
