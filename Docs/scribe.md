@@ -45,7 +45,7 @@ The AI Clinical Scribe transcribes doctor-patient consultations, offers real-tim
 
 ### 5. Structured SOAP Extraction (Groq Cloud)
 - Processed by `extract()` in `scribe/extraction.py` using Groq's `openai/gpt-oss-120b`.
-- Governed by the versioned schema prompt in [`scribe/prompts/scribe_extraction.md`](./prompts/scribe_extraction.md).
+- Governed by the versioned schema prompt in [`scribe_extraction.md`](./scribe_extraction.md).
 - Extracts:
   - `title`: Short clinical summary title (e.g., "Hypertension & Glycemic Follow-Up").
   - `summary`: Comprehensive clinical summary.

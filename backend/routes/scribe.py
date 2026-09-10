@@ -1,10 +1,14 @@
 import re
 import uuid
 
+import requests
 from flask import Blueprint, request, jsonify
 
 from backend.auth_utils import require_role
-from backend.neo4j_connection import get_session as neo4j_get_session
+from backend.neo4j_connection import (
+    get_session as neo4j_get_session,
+    is_connected as neo4j_is_connected,
+)
 from scribe import session as sess
 from scribe.transcription import translate_text
 from scribe.extraction import extract, ExtractionError
@@ -127,6 +131,12 @@ def extract_note(session_id):
             "status": "extracted",
             "note": note,
         })
+    except requests.exceptions.RequestException:
+        sess.set_state(session_id, "extract_error")
+        return jsonify({
+            "error": "Groq unreachable — check your internet connection.",
+            "status": "extract_error",
+        }), 502
     except ExtractionError as e:
         sess.set_state(session_id, "extract_error")
         return jsonify({"error": str(e), "status": "extract_error"}), 502
@@ -334,6 +344,8 @@ def save_note(session_id):
         import traceback
         traceback.print_exc()
         sess.set_state(session_id, "save_error")
+        if not neo4j_is_connected():
+            return jsonify({"error": "Database unreachable — cannot save notes while offline."}), 503
         return jsonify({"error": f"Database save failed: {e}"}), 500
 
 
