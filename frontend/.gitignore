@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Moonshine WAM model weights (self-hosted, ~291 MB) — ignore, keep local
+public/models/moonshine/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
