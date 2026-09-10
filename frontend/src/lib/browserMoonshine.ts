@@ -4,8 +4,8 @@ import { blobToAudioBuffer } from './browserWhisper'
 // Moonshine Medium Streaming: best-performing English streaming model (~245M params).
 // Runs entirely in-browser via WebAssembly. 0 bytes leave the user's device.
 //
-// The model weights are self-hosted (see frontend/public/models/moonshine/) so the
-// engine works fully offline with no CDN fetch and no first-use download.
+// The model weights are self-hosted in frontend/public/models/moonshine/ so the
+// engine works fully offline with no CDN fetch and zero latency on first load.
 export const MOONSHINE_MODEL_ARCH: ModelArch = ModelArch.MediumStreaming
 export const MOONSHINE_LANG = 'en'
 export const MOONSHINE_MODEL_BASE = '/models/moonshine/'
@@ -29,33 +29,68 @@ export interface MoonshineMicOptions {
   onError?: (error: Error) => void
 }
 
+let localModelsChecked: boolean | null = null
+
 /**
- * Builds a live Moonshine transcriber from the self-hosted model files
- * and starts listening on the microphone. Everything happens on-device.
+ * Checks whether self-hosted model files exist in /models/moonshine/.
+ * Returns true if valid model files are served; false if missing or SPA HTML fallback is returned.
  */
-/** Clear stale Moonshine model caches from previous failed loads. */
-async function clearStaleMoonshineCaches(): Promise<void> {
-  if (typeof caches === 'undefined') return
-  for (const name of ['moonshine-models-v1', 'moonshine-models']) {
-    try { await caches.delete(name) } catch { /* ignore */ }
+export async function areLocalMoonshineModelsAvailable(): Promise<boolean> {
+  if (localModelsChecked !== null) return localModelsChecked
+  try {
+    const res = await fetch(`${MOONSHINE_MODEL_BASE}streaming_config.json`, { method: 'HEAD' })
+    if (!res.ok) {
+      localModelsChecked = false
+      return false
+    }
+    const ct = res.headers.get('content-type') || ''
+    // If Vite serves index.html fallback for missing files, content-type is text/html
+    localModelsChecked = !ct.includes('text/html')
+    return localModelsChecked
+  } catch {
+    localModelsChecked = false
+    return false
   }
 }
 
+/** Clear Moonshine model caches only if explicitly requested (e.g., debug/reset). */
+export async function resetMoonshineCache(): Promise<void> {
+  if (typeof caches === 'undefined') return
+  for (const name of ['moonshine-models-v1', 'moonshine-models']) {
+    try {
+      await caches.delete(name)
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
+ * Builds a live Moonshine transcriber from local model files (or CDN fallback)
+ * and starts listening on the microphone. Everything happens 100% on-device.
+ */
 export async function startMoonshineMic(opts: MoonshineMicOptions): Promise<MicTranscriber> {
-  await clearStaleMoonshineCaches()
+  const hasLocal = await areLocalMoonshineModelsAvailable()
+
   const mic = new MicTranscriber()
-    .modelsFrom(MOONSHINE_FILES)
     .language(MOONSHINE_LANG)
     .modelArch(MOONSHINE_MODEL_ARCH)
     .onText((text) => opts.onText(text))
     .onLine((line) => opts.onLine(line.text))
     .onError((error) => opts.onError?.(error))
-    .onProgress((fraction, _file) => {
+    .onProgress((fraction, file) => {
       if (opts.onProgress) {
         const pct = Math.min(100, Math.max(0, Math.round(fraction * 100)))
-        opts.onProgress(fraction, `Loading Moonshine model (Medium Streaming): ${pct}%`)
+        const filename = file ? ` (${file.split('/').pop()})` : ''
+        opts.onProgress(fraction, `Loading Moonshine model: ${pct}%${filename}`)
       }
     })
+
+  // If local files are downloaded in public/models/moonshine, use them.
+  // Otherwise, default to the official Moonshine CDN catalog.
+  if (hasLocal) {
+    mic.modelsFrom(MOONSHINE_FILES)
+  }
 
   await mic.load()
   await mic.start()
@@ -92,18 +127,32 @@ export async function transcribeFileWithMoonshine(
     return ''
   }
 
-  if (onProgress) onProgress('Loading Moonshine model (Medium Streaming) in browser...')
-  await clearStaleMoonshineCaches()
-  const transcriber = await Transcriber.loadFromUrls(MOONSHINE_FILES, {
-    modelArch: MOONSHINE_MODEL_ARCH,
-    onProgress: (loaded, total) => {
-      if (onProgress && typeof total === 'number' && total > 0) {
-        onProgress(`Loading Moonshine model: ${Math.round((loaded / total) * 100)}%`)
-      } else if (onProgress) {
-        onProgress('Loading Moonshine model...')
-      }
-    },
-  })
+  if (onProgress) onProgress('Loading Moonshine model in browser...')
+  const hasLocal = await areLocalMoonshineModelsAvailable()
+
+  const progressHandler = (loaded: number, total?: number, file?: string) => {
+    if (onProgress && typeof total === 'number' && total > 0) {
+      const pct = Math.round((loaded / total) * 100)
+      const filename = file ? ` [${file}]` : ''
+      onProgress(`Loading Moonshine model: ${pct}%${filename}`)
+    } else if (onProgress) {
+      onProgress('Loading Moonshine model...')
+    }
+  }
+
+  let transcriber: Transcriber
+  if (hasLocal) {
+    transcriber = await Transcriber.loadFromUrls(MOONSHINE_FILES, {
+      modelArch: MOONSHINE_MODEL_ARCH,
+      onProgress: progressHandler,
+    })
+  } else {
+    transcriber = await Transcriber.load({
+      language: MOONSHINE_LANG,
+      modelArch: MOONSHINE_MODEL_ARCH,
+      onProgress: progressHandler,
+    })
+  }
 
   try {
     if (onProgress) onProgress('Transcribing in browser via WebAssembly...')
