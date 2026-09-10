@@ -435,3 +435,882 @@
   }
 }
 
+
+
+/* ==========================================================================
+   Methodology Selector Bar & Vector Inspector Styles
+   ========================================================================== */
+
+.tii__title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.tii__patient-id-badge {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  padding: 2px 8px;
+  background: var(--color-surface-elevated, #1f293d);
+  border: 1px solid var(--color-border, #334155);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--color-text-muted, #94a3b8);
+}
+
+.tii__methodology-card {
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%);
+  border: 1px solid var(--color-border, #334155);
+  border-radius: var(--radius-lg, 12px);
+  padding: var(--space-4, 16px);
+  margin-bottom: var(--space-4, 16px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.tii__methodology-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3, 12px);
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tii__methodology-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-accent, #38bdf8);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tii__methodology-note {
+  font-size: 11px;
+  color: var(--color-text-muted, #94a3b8);
+  background: rgba(56, 189, 248, 0.08);
+  padding: 3px 10px;
+  border-radius: 9999px;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+}
+
+.tii__methodology-toggles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.tii__toggle-btn {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--color-surface, #0f172a);
+  border: 1px solid var(--color-border, #334155);
+  border-radius: var(--radius-md, 8px);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s ease;
+  color: inherit;
+}
+
+.tii__toggle-btn:hover {
+  border-color: var(--color-accent, #38bdf8);
+  background: rgba(56, 189, 248, 0.04);
+}
+
+.tii__toggle-btn--active {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  box-shadow: 0 0 15px rgba(56, 189, 248, 0.15);
+}
+
+.tii__toggle-icon {
+  margin-top: 2px;
+  color: #38bdf8;
+  flex-shrink: 0;
+}
+
+.tii__toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tii__toggle-title {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text, #f8fafc);
+}
+
+.tii__badge-active {
+  font-size: 9px;
+  text-transform: uppercase;
+  font-weight: 700;
+  background: #0284c7;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.tii__toggle-sub {
+  font-size: 11px;
+  color: var(--color-text-muted, #94a3b8);
+  line-height: 1.4;
+}
+
+/* Inspector Card */
+.tii__inspector-card {
+  background: var(--color-surface, #0f172a);
+  border: 1px solid var(--color-border, #334155);
+  border-radius: var(--radius-lg, 12px);
+  margin-bottom: var(--space-6, 24px);
+  overflow: hidden;
+}
+
+.tii__inspector-header-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  background: rgba(30, 41, 59, 0.5);
+  border: none;
+  border-bottom: 1px solid var(--color-border, #334155);
+  cursor: pointer;
+  color: var(--color-text, #f8fafc);
+  transition: background 0.15s ease;
+}
+
+.tii__inspector-header-btn:hover {
+  background: rgba(30, 41, 59, 0.8);
+}
+
+.tii__inspector-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tii__inspector-pill {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  background: rgba(14, 165, 233, 0.15);
+  color: #38bdf8;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  border: 1px solid rgba(14, 165, 233, 0.3);
+}
+
+.tii__inspector-body {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tii__inspector-formula-box {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-left: 3px solid #38bdf8;
+  border-radius: var(--radius-md, 8px);
+  padding: 14px 16px;
+}
+
+.tii__formula-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  color: #38bdf8;
+  margin-bottom: 6px;
+}
+
+.tii__formula-code {
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  font-weight: 600;
+  color: #f1f5f9;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.tii__formula-desc {
+  font-size: 12px;
+  color: var(--color-text-muted, #94a3b8);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.tii__dimensions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.tii__dimension-card {
+  background: rgba(30, 41, 59, 0.4);
+  border: 1px solid var(--color-border, #334155);
+  border-radius: var(--radius-md, 8px);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tii__dim-num {
+  font-size: 18px;
+  font-weight: 700;
+  color: #38bdf8;
+}
+
+.tii__dim-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text, #f8fafc);
+}
+
+.tii__dim-sub {
+  font-size: 10px;
+  color: var(--color-text-muted, #94a3b8);
+}
+
+/* Similar Cohort Grid & Cards */
+.tii__similar-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: var(--space-4, 16px);
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.tii__similar-sub {
+  font-size: var(--font-xs, 12px);
+  color: var(--color-text-muted, #94a3b8);
+  display: block;
+  margin-top: 2px;
+}
+
+.tii__engine-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  background: rgba(14, 165, 233, 0.1);
+  color: #38bdf8;
+  border: 1px solid rgba(14, 165, 233, 0.3);
+  border-radius: 6px;
+}
+
+.tii__cohort-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.tii__patient-card {
+  background: var(--color-surface, #0f172a);
+  border: 1px solid var(--color-border, #334155);
+  border-radius: var(--radius-lg, 12px);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tii__patient-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(56, 189, 248, 0.4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.tii__card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tii__card-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tii__card-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text, #f8fafc);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.tii__card-name:hover {
+  color: #38bdf8;
+}
+
+.tii__card-id {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--color-text-muted, #94a3b8);
+}
+
+.tii__score-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  padding: 6px 8px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.2) 0%, rgba(2, 132, 199, 0.3) 100%);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: var(--radius-md, 8px);
+}
+
+.tii__score-num {
+  font-size: 15px;
+  font-weight: 800;
+  color: #38bdf8;
+  line-height: 1;
+}
+
+.tii__score-text {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  color: var(--color-text-muted, #94a3b8);
+  margin-top: 2px;
+}
+
+/* Subscores */
+.tii__subscores {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(30, 41, 59, 0.3);
+  padding: 10px 12px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.tii__subscore-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tii__subscore-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.tii__subscore-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-muted, #94a3b8);
+}
+
+.tii__subscore-val {
+  font-weight: 700;
+  color: var(--color-text, #f8fafc);
+}
+
+.tii__subscore-bar {
+  height: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.tii__subscore-fill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.3s ease;
+}
+
+.tii__subscore-fill--cond {
+  background: linear-gradient(90deg, #38bdf8, #0284c7);
+}
+
+.tii__subscore-fill--drug {
+  background: linear-gradient(90deg, #a855f7, #7c3aed);
+}
+
+/* Tags Section */
+.tii__tags-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.tii__tags-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted, #94a3b8);
+}
+
+.tii__tags-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tii__tag {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  line-height: 1.3;
+}
+
+.tii__tag--disease {
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.tii__tag--med {
+  background: rgba(168, 85, 247, 0.12);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.25);
+}
+
+.tii__tag--none {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-muted, #64748b);
+  font-style: italic;
+}
+
+/* Rationale Box */
+.tii__rationale-box {
+  background: rgba(30, 41, 59, 0.4);
+  border-left: 2px solid #38bdf8;
+  padding: 8px 10px;
+  border-radius: 0 6px 6px 0;
+}
+
+.tii__rationale-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  color: #38bdf8;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.tii__rationale-text {
+  font-size: 11px;
+  color: var(--color-text-muted, #94a3b8);
+  line-height: 1.4;
+  margin: 0;
+}
+
+/* Card Actions */
+.tii__card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+}
+
+.tii__inspect-btn {
+  color: #38bdf8;
+  text-decoration: none;
+  font-weight: 600;
+  transition: transform 0.15s ease;
+}
+
+.tii__inspect-btn:hover {
+  text-decoration: underline;
+  transform: translateX(2px);
+}
+
+.tii__profile-link {
+  color: var(--color-text-muted, #94a3b8);
+  text-decoration: none;
+}
+
+.tii__profile-link:hover {
+  color: var(--color-text, #f8fafc);
+  text-decoration: underline;
+}
+
+@media (max-width: 768px) {
+  .tii__methodology-toggles {
+    grid-template-columns: 1fr;
+  }
+  .tii__cohort-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* Live Mathematical Proof Box */
+.tii__math-proof {
+  margin-top: 12px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tii__math-proof-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #818cf8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed rgba(99, 102, 241, 0.2);
+}
+
+.tii__math-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tii__math-step {
+  background: rgba(30, 41, 59, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+}
+
+.tii__math-step--composite {
+  background: rgba(99, 102, 241, 0.1);
+  border-color: rgba(99, 102, 241, 0.35);
+}
+
+.tii__math-step-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+
+.tii__step-num {
+  color: #38bdf8;
+  font-weight: 700;
+}
+
+.tii__math-formula {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.74rem;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.55);
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin-bottom: 4px;
+}
+
+.tii__math-eval {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  color: #e2e8f0;
+  line-height: 1.5;
+  padding-left: 4px;
+}
+
+.tii__math-final-score {
+  font-weight: 700;
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.12);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
+
+/* Top 3 & Vector Comparator Styles */
+.tii__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tii__toggle-vectors-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  color: #a5b4fc;
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tii__toggle-vectors-btn:hover {
+  background: rgba(99, 102, 241, 0.22);
+  border-color: rgba(99, 102, 241, 0.5);
+  color: #fff;
+}
+
+.tii__toggle-vectors-btn--active {
+  background: rgba(99, 102, 241, 0.28);
+  border-color: #818cf8;
+  color: #fff;
+}
+
+.tii__card-rank-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 2px;
+}
+
+.tii__card-rank-badge--subtle {
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.1);
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+.tii__cohort-counter {
+  font-size: 0.74rem;
+  color: #94a3b8;
+  background: rgba(15, 23, 42, 0.4);
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.tii__vector-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  background: rgba(30, 41, 59, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 6px;
+  color: #cbd5e1;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tii__vector-toggle-btn:hover {
+  background: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.35);
+  color: #fff;
+}
+
+.tii__vector-toggle-btn--active {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.45);
+  color: #a5b4fc;
+}
+
+/* Vector Comparator Box */
+.tii__vector-comparator {
+  margin-top: 6px;
+  margin-bottom: 12px;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tii__vc-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-bottom: 1px dashed rgba(56, 189, 248, 0.2);
+  padding-bottom: 6px;
+}
+
+.tii__vc-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #38bdf8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tii__vc-subtitle {
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+
+.tii__vc-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tii__vc-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tii__vc-sec-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.tii__vc-dim-summary {
+  font-size: 0.7rem;
+  color: #94a3b8;
+  font-family: ui-monospace, monospace;
+}
+
+.tii__vc-table {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.tii__vc-table-header {
+  display: grid;
+  grid-template-columns: 1fr 60px 60px 110px;
+  padding: 6px 10px;
+  background: rgba(30, 41, 59, 0.6);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.tii__vc-col-bit {
+  text-align: center;
+}
+
+.tii__vc-col-status {
+  text-align: right;
+}
+
+.tii__vc-row {
+  display: grid;
+  grid-template-columns: 1fr 60px 60px 110px;
+  padding: 5px 10px;
+  align-items: center;
+  font-size: 0.72rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.05);
+}
+
+.tii__vc-row:last-child {
+  border-bottom: none;
+}
+
+.tii__vc-row--match {
+  background: rgba(52, 211, 153, 0.06);
+}
+
+.tii__vc-feat-name {
+  color: #cbd5e1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tii__vc-bit {
+  font-family: ui-monospace, monospace;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.tii__vc-bit--1 {
+  color: #34d399;
+}
+
+.tii__vc-bit--0 {
+  color: #475569;
+}
+
+.tii__vc-status {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.tii__vc-badge {
+  font-size: 0.64rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.tii__vc-badge--match {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.15);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
+.tii__vc-badge--target {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.12);
+  border: 1px solid rgba(96, 165, 250, 0.25);
+}
+
+.tii__vc-badge--cand {
+  color: #c084fc;
+  background: rgba(192, 132, 252, 0.12);
+  border: 1px solid rgba(192, 132, 252, 0.25);
+}
+
+.tii__vc-empty {
+  font-size: 0.72rem;
+  color: #64748b;
+  font-style: italic;
+  padding: 6px 10px;
+}

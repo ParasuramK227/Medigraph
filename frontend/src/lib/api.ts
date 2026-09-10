@@ -346,23 +346,52 @@ export interface TreatmentRanking {
   note: string | null
 }
 
+export interface CalculationMeta {
+  methodology: string
+  formula: string
+  weight_condition: number
+  weight_drug: number
+  condition_vocab_size: number
+  drug_vocab_size: number
+  target_conditions_count: number
+  target_drugs_count: number
+}
+export interface SimilarPatient {
+  id: string
+  name: string
+  similarity: number
+  condition_similarity?: number
+  drug_similarity?: number
+  overlap: number
+  drug_overlap?: number
+  shared_diagnoses?: string[]
+  shared_medications?: string[]
+  diagnoses?: string[]
+  medications?: string[]
+  target_diag_count?: number
+  candidate_diag_count?: number
+  shared_diag_count?: number
+  target_drug_count?: number
+  candidate_drug_count?: number
+  shared_drug_count?: number
+  rationale?: string
+}
 export interface TreatmentIntel {
-  patient: Patient
+  patient: Patient & { medications?: string[] }
+  method?: 'vector' | 'cypher'
+  calculation_meta?: CalculationMeta
   diagnoses: string[]
   ranked: RankedDiagnosis[]
   treatments?: TreatmentRanking
   recovered_patients_by_treatment?: Record<string, Array<{ id: string; name: string }>>
-  similar_patients: Array<{
-    id: string
-    name: string
-    similarity: number
-    overlap: number
-  }>
+  similar_patients: SimilarPatient[]
 }
-
-export async function fetchTreatmentIntel(id: string): Promise<TreatmentIntel | null> {
+export async function fetchTreatmentIntel(
+  id: string,
+  method: 'vector' | 'cypher' = 'vector'
+): Promise<TreatmentIntel | null> {
   try {
-    return await apiFetch<TreatmentIntel>(`/api/graph/patients/${id}/treatment-intel`)
+    return await apiFetch<TreatmentIntel>(`/api/graph/patients/${id}/treatment-intel?method=${method}`)
   } catch (e) {
     if ((e as ApiError).status === 404) return null
     throw e
@@ -620,4 +649,4 @@ export async function fetchTopSectors(): Promise<TopSectorRow[]> {
   const data = await apiFetch<TopSectorRow[]>('/api/graph/dashboard/top-sectors')
   return Array.isArray(data) ? data : []
 }
-
+

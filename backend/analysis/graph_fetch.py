@@ -15,14 +15,16 @@ def _rows(session, query: str, **params) -> List[Dict[str, Any]]:
 
 
 def fetch_all_patients_with_diags(session) -> List[Dict[str, Any]]:
-    """Fetch every patient with their id/name/gender + list of diagnosis names."""
+    """Fetch every patient with their id/name/gender + list of diagnosis names + prescribed medications."""
     rows = _rows(
         session,
         """
         MATCH (p:Patient)
         OPTIONAL MATCH (p)-[:HAS_DIAGNOSIS]->(d:Disease)
+        OPTIONAL MATCH (p)-[:HAD_ENCOUNTER]->(:Encounter)-[:PRESCRIBED]->(m:Medication)
         RETURN p.id AS id, p.first_name AS first_name, p.last_name AS last_name,
-               p.gender AS gender, collect(DISTINCT d.name) AS diagnoses
+               p.gender AS gender, collect(DISTINCT d.name) AS diagnoses,
+               collect(DISTINCT m.name) AS medications
         """,
     )
     out = []
@@ -33,13 +35,14 @@ def fetch_all_patients_with_diags(session) -> List[Dict[str, Any]]:
             "last_name": r.get("last_name"),
             "gender": r.get("gender"),
             "diagnoses": [d for d in (r.get("diagnoses") or []) if d is not None],
+            "medications": [m for m in (r.get("medications") or []) if m is not None],
         })
     return out
 
 
 def fetch_patient_intelligence(session, patient_id: str) -> Optional[Dict[str, Any]]:
     """Return enriched data for a single patient:
-    baseline info, diagnoses, treatments, lab tests, consultation notes,
+    baseline info, diagnoses, prescribed medications, treatments, lab tests, consultation notes,
     and medication coverage for their diagnoses.
 
     Returns None if the patient does not exist.
@@ -53,11 +56,13 @@ def fetch_patient_intelligence(session, patient_id: str) -> Optional[Dict[str, A
         OPTIONAL MATCH (p)-[:HAS_LAB_TEST]->(l:LabTest)
         OPTIONAL MATCH (p)-[:HAS_CONSULTATION_NOTE]->(n:ConsultationNote)
         OPTIONAL MATCH (p)-[:HAS_ALLERGY]->(a:Allergy)
+        OPTIONAL MATCH (p)-[:HAD_ENCOUNTER]->(:Encounter)-[:PRESCRIBED]->(m:Medication)
         RETURN p.id AS id, p.first_name AS first_name, p.last_name AS last_name,
                p.gender AS gender, p.date_of_birth AS date_of_birth,
                p.email AS email, p.contact_number AS contact_number,
                p.address AS address, p.insurance_provider AS insurance_provider,
                collect(DISTINCT d.name) AS diagnoses,
+               collect(DISTINCT m.name) AS medications,
                collect(DISTINCT {id: t.id, type: t.treatment_type,
                                  cost: t.cost, date: t.treatment_date,
                                  description: t.description,
@@ -88,6 +93,7 @@ def fetch_patient_intelligence(session, patient_id: str) -> Optional[Dict[str, A
         "address": r.get("address"),
         "insurance_provider": r.get("insurance_provider"),
         "diagnoses": [d for d in (r.get("diagnoses") or []) if d],
+        "medications": [m for m in (r.get("medications") or []) if m],
         "treatments": [t for t in (r.get("treatments") or []) if t.get("id")],
         "labs": [l for l in (r.get("labs") or []) if l.get("id")],
         "notes": [n for n in (r.get("notes") or []) if n.get("id")],
@@ -299,18 +305,35 @@ def get_patient_intelligence(session, patient_id: str) -> Optional[Dict[str, Any
     }
 
 
-def get_treatment_intel(session, patient_id: str) -> Optional[Dict[str, Any]]:
+def get_treatment_intel(session, patient_id: str, method: str = "vector") -> Optional[Dict[str, Any]]:
     """Per-patient ranked diagnoses (1 = highest success likelihood).
 
     Pure-python scoring: success = lab-normalized outcome among similar
     patients sharing each diagnosis. Returns None if the patient is missing.
+    
+    method: 'vector' (Multimodal Phenotype Vector Space) or 'cypher' (Legacy Jaccard graph join)
     """
     target = fetch_patient_intelligence(session, patient_id)
     if target is None:
         return None
     all_patients = fetch_all_patients_with_diags(session)
     from . import treatment_intel
-    similar = treatment_intel.compute_similar_patients(target, all_patients)
+
+    if method in ("cypher", "jaccard"):
+        similar = treatment_intel.compute_similar_patients(target, all_patients)
+        calc_meta = {
+            "methodology": "Legacy Cypher Graph Overlap (Discrete Jaccard)",
+            "formula": "Jaccard = |Diags_A ∩ Diags_B| / |Diags_A ∪ Diags_B|",
+            "weight_condition": 1.0,
+            "weight_drug": 0.0,
+            "condition_vocab_size": len(set(target.get("diagnoses") or [])),
+            "drug_vocab_size": 0,
+            "target_conditions_count": len(target.get("diagnoses") or []),
+            "target_drugs_count": len(target.get("medications") or []),
+        }
+    else:
+        similar, calc_meta = treatment_intel.compute_multimodal_patient_similarity(target, all_patients)
+
     sim_ids = [s["id"] for s in similar if s.get("id")]
     labs_by_sim = fetch_labs_by_patient(session, sim_ids)
     for s in similar:
@@ -357,9 +380,6 @@ def get_treatment_intel(session, patient_id: str) -> Optional[Dict[str, Any]]:
                 if not matched:
                     continue
                 entry = {"id": pid, "name": ((s.get("first_name") or "") + " " + (s.get("last_name") or "")).strip()}
-                # key recovery buckets by treatment *name* so they attach to the
-                # deduplicated treatment entry regardless of which treatment-node
-                # id won (several nodes can share a name, e.g. "X-Ray").
                 bucket = recovered_patients_by_treatment.setdefault(name or "", [])
                 if entry not in bucket:
                     bucket.append(entry)
@@ -374,14 +394,35 @@ def get_treatment_intel(session, patient_id: str) -> Optional[Dict[str, Any]]:
             "first_name": target["first_name"],
             "last_name": target["last_name"],
             "gender": target.get("gender"),
+            "medications": target.get("medications", []),
         },
+        "method": method,
+        "calculation_meta": calc_meta,
         "diagnoses": targets_diags,
         "ranked": ranked,
         "treatments": treatments,
         "recovered_patients_by_treatment": recovered_patients_by_treatment,
         "similar_patients": [
-            {"id": s.get("id"), "name": (s.get("first_name") or "") + " " + (s.get("last_name") or ""),
-             "similarity": s.get("similarity"), "overlap": s.get("overlap")}
+            {
+                "id": s.get("id"),
+                "name": (s.get("name") or (s.get("first_name") or "") + " " + (s.get("last_name") or "")).strip(),
+                "similarity": s.get("similarity", 0.0),
+                "condition_similarity": s.get("condition_similarity", s.get("similarity", 0.0)),
+                "drug_similarity": s.get("drug_similarity", 0.0),
+                "overlap": s.get("overlap", 0),
+                "drug_overlap": s.get("drug_overlap", 0),
+                "shared_diagnoses": s.get("shared_diagnoses", []),
+                "shared_medications": s.get("shared_medications", []),
+                "target_diag_count": s.get("target_diag_count", 0),
+                "candidate_diag_count": s.get("candidate_diag_count", 0),
+                "shared_diag_count": s.get("shared_diag_count", s.get("overlap", 0)),
+                "target_drug_count": s.get("target_drug_count", 0),
+                "candidate_drug_count": s.get("candidate_drug_count", 0),
+                "shared_drug_count": s.get("shared_drug_count", s.get("drug_overlap", 0)),
+                "diagnoses": s.get("diagnoses", []),
+                "medications": s.get("medications", []),
+                "rationale": s.get("rationale", ""),
+            }
             for s in similar
         ],
     }

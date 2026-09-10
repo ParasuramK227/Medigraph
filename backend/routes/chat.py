@@ -4,6 +4,7 @@ import requests
 from dotenv import load_dotenv
 from flask import Blueprint, request, jsonify
 
+from backend.analysis import graph_fetch, treatment_intel
 from backend.auth_utils import require_auth
 from backend.chat_privacy import deidentify_profile, deidentify_cohort, deidentify_message
 from backend.neo4j_connection import get_session as neo4j_get_session
@@ -115,6 +116,7 @@ def _fetch_patient_profile(session, patient_id: str) -> dict | None:
     MATCH (p:Patient {id: $pid})
     OPTIONAL MATCH (p)-[:HAS_DIAGNOSIS]->(d:Disease)
     OPTIONAL MATCH (m:Medication)-[:TREATS]->(d)
+    OPTIONAL MATCH (p)-[:HAD_ENCOUNTER]->(:Encounter)-[:PRESCRIBED]->(pm:Medication)
     OPTIONAL MATCH (p)-[:RECEIVED_TREATMENT]->(t:Treatment)
     OPTIONAL MATCH (p)-[:HAS_LAB_TEST]->(l:LabTest)
     OPTIONAL MATCH (p)-[:HAS_ALLERGY]->(a:Allergy)
@@ -127,6 +129,7 @@ def _fetch_patient_profile(session, patient_id: str) -> dict | None:
            p.city AS city,
            p.insurance_provider AS insurance,
            collect(DISTINCT d.name) AS diagnoses,
+           collect(DISTINCT pm.name) AS prescribed_medications,
            collect(DISTINCT {med: m.name, for_disease: d.name})[0..10] AS medications,
            collect(DISTINCT {type: t.treatment_type, outcome: t.outcome, cost: t.cost, date: t.treatment_date})[0..8] AS treatments,
            collect(DISTINCT {name: l.name, val: l.result + ' ' + coalesce(l.unit, ''), status: l.status, date: l.date})[0..12] AS labs,
@@ -137,7 +140,9 @@ def _fetch_patient_profile(session, patient_id: str) -> dict | None:
     rec = session.run(query, pid=patient_id).single()
     if not rec or not rec["name"]:
         return None
-    return dict(rec)
+    d = dict(rec)
+    d["medications_list"] = d.get("prescribed_medications") or [m["med"] for m in d.get("medications", []) if m.get("med")]
+    return d
 
 
 def _fetch_cohort_context(session, message: str) -> dict:
@@ -369,6 +374,14 @@ def _build_context_text(profile: dict | None, cohort: dict | None) -> str:
             med_strs = [f"{m['med']} (for {m['for_disease']})" for m in profile["medications"] if m.get("med")]
             if med_strs:
                 lines.append(f"- Indicated Medications: {'; '.join(med_strs)}")
+        if profile.get("prescribed_medications"):
+            lines.append(f"- Active Prescribed Medications (Encounters): {'; '.join(profile['prescribed_medications'][:8])}")
+        if profile.get("similar_cohort"):
+            lines.append("- Similar Patient Cohort (Multimodal Phenotype Vector Space - Conditions & Drug Regimens):")
+            for sp in profile["similar_cohort"]:
+                m_list = ", ".join(sp.get("shared_medications", [])[:2]) or "None"
+                d_list = ", ".join(sp.get("shared_diagnoses", [])[:2]) or "None"
+                lines.append(f"  * {sp['name']} (Match: {int(sp['similarity']*100)}% | Conditions: {d_list} | Shared Drugs: {m_list})")
         if profile.get("treatments"):
             treat_strs = [f"{t['type']} [Outcome: {t.get('outcome', 'completed')}, Cost: ${t.get('cost', 'N/A')}]" for t in profile["treatments"] if t.get("type")]
             if treat_strs:
@@ -511,6 +524,13 @@ def chat_query():
             profile = None
             if patient_id:
                 profile = _fetch_patient_profile(session, patient_id)
+                if profile:
+                    try:
+                        all_pts = graph_fetch.fetch_all_patients_with_diags(session)
+                        sim_pts, _ = treatment_intel.compute_multimodal_patient_similarity(profile, all_pts)
+                        profile["similar_cohort"] = sim_pts[:3]
+                    except Exception:
+                        profile["similar_cohort"] = []
 
             cohort = _fetch_cohort_context(session, message)
 

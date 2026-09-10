@@ -6,12 +6,49 @@ by provenance (cohort size, evidence counts) rather than opaque model output.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
+import math
+import re
+
 # ---------------------------------------------------------------------------
-# Similarity
+# Similarity & Multimodal Clinical Vector Engine
 # ---------------------------------------------------------------------------
+
+def extract_core_drug(med: str) -> str:
+    """Extract canonical active drug substance from full clinical prescription string.
+    
+    E.g. 'lisinopril 10 MG Oral Tablet' -> 'lisinopril'
+         '120 ACTUAT fluticasone propionate 0.044 MG [Flovent]' -> 'fluticasone propionate'
+    """
+    if not med or not isinstance(med, str):
+        return ""
+    cleaned = re.sub(r"\[.*?\]", "", med).strip()
+    # Strip leading dosage/count forms e.g. "120 ACTUAT", "24 HR", "1 ML"
+    cleaned = re.sub(r"^\d+\s+(?:ACTUAT|HR|ML|MG)\s+", "", cleaned, flags=re.I)
+    # Match drug name words prior to numerical strengths or forms
+    match = re.match(r"^([A-Za-z\s\-\/\(\)]+?)(?:\s+\d+|\s+Oral|\s+Tablet|\s+Injection|$)", cleaned, re.I)
+    if match and len(match.group(1).strip()) > 2:
+        return match.group(1).strip().lower()
+    return cleaned.strip().lower()
+
+
+def cosine_similarity(items_a: List[str], items_b: List[str]) -> float:
+    """Compute exact Cosine Similarity between two sparse binary multi-hot sets.
+    
+    Cosine(A, B) = |A ∩ B| / (sqrt(|A|) * sqrt(|B|))
+    """
+    sa = set(x.strip().lower() for x in (items_a or []) if x and x.strip())
+    sb = set(x.strip().lower() for x in (items_b or []) if x and x.strip())
+    if not sa or not sb:
+        return 0.0
+    shared = sa & sb
+    if not shared:
+        return 0.0
+    denom = math.sqrt(len(sa)) * math.sqrt(len(sb))
+    return round(len(shared) / denom, 3) if denom > 0 else 0.0
+
 
 def jaccard(a: List[str], b: List[str]) -> float:
     """Jaccard similarity over two iterables of strings."""
@@ -25,12 +62,7 @@ def jaccard(a: List[str], b: List[str]) -> float:
 def compute_similar_patients(
     target: Dict[str, Any], candidates: List[Dict[str, Any]]
 ) -> List[Dict[str, Any]]:
-    """Compute real similar patients to the target from shared diagnoses.
-
-    Each candidate is enriched with the shared-diagnosis overlap and a Jaccard
-    similarity score, sorted descending. Only patients sharing >=1 diagnosis
-    with the target are returned.
-    """
+    """Legacy Cypher/Jaccard similarity matching across shared diagnoses."""
     target_diags = set(target.get("diagnoses") or [])
     similar = []
     for other in candidates:
@@ -47,9 +79,148 @@ def compute_similar_patients(
         enriched["overlap"] = len(shared)
         enriched["similarity"] = round(sim, 3)
         enriched["shared_diagnoses"] = sorted(shared)
+        enriched["shared_medications"] = []
+        enriched["condition_similarity"] = round(sim, 3)
+        enriched["drug_similarity"] = 0.0
+        enriched["target_diag_count"] = len(target_diags)
+        enriched["candidate_diag_count"] = len(other_diags)
+        enriched["shared_diag_count"] = len(shared)
+        enriched["target_drug_count"] = 0
+        enriched["candidate_drug_count"] = 0
+        enriched["shared_drug_count"] = 0
+        enriched["rationale"] = (
+            f"Shares {len(shared)} diagnosis ({', '.join(sorted(shared)[:2])}) via graph overlap."
+        )
         similar.append(enriched)
     similar.sort(key=lambda r: (r["similarity"], r["overlap"]), reverse=True)
     return similar
+
+
+def compute_multimodal_patient_similarity(
+    target: Dict[str, Any],
+    candidates: List[Dict[str, Any]],
+    weight_condition: float = 0.50,
+    weight_drug: float = 0.50,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Alternate methodology to Cypher query: Multimodal Clinical Vector Similarity.
+    
+    Encodes each patient into dual orthogonal clinical spaces:
+    1. Condition Vector (Active Diagnoses)
+    2. Pharmacotherapy Vector (Prescribed Medications / Core Drug APIs)
+    
+    Computes weighted Cosine Similarity:
+      Score = (w_cond * Cosine(Cond_A, Cond_B)) + (w_drug * Cosine(Drug_A, Drug_B))
+    
+    Returns (sorted_similar_patients, calculation_meta).
+    """
+    target_diags = [d for d in (target.get("diagnoses") or []) if d]
+    target_raw_meds = [m for m in (target.get("medications") or []) if m]
+    target_core_meds = [extract_core_drug(m) for m in target_raw_meds if extract_core_drug(m)]
+
+    # Collect unique vocabulary across entire population
+    all_conditions = set(target_diags)
+    all_drugs = set(target_core_meds)
+
+    for c in candidates:
+        for d in (c.get("diagnoses") or []):
+            if d:
+                all_conditions.add(d)
+        for m in (c.get("medications") or []):
+            core = extract_core_drug(m)
+            if core:
+                all_drugs.add(core)
+
+    target_diags_lower = {d.strip().lower() for d in target_diags}
+    target_core_meds_set = set(target_core_meds)
+
+    similar = []
+    for other in candidates:
+        if other.get("id") == target.get("id"):
+            continue
+
+        other_diags = [d for d in (other.get("diagnoses") or []) if d]
+        other_raw_meds = [m for m in (other.get("medications") or []) if m]
+        other_core_meds = [extract_core_drug(m) for m in other_raw_meds if extract_core_drug(m)]
+
+        # 1. Condition Vector Cosine Similarity
+        cond_sim = cosine_similarity(target_diags, other_diags)
+
+        # 2. Drug Regimen Vector Cosine Similarity
+        drug_sim = cosine_similarity(target_core_meds, other_core_meds)
+
+        # 3. Composite Clinical Phenotype Score
+        composite = (weight_condition * cond_sim) + (weight_drug * drug_sim)
+
+        # Identify exact shared entities for display
+        shared_diags = [
+            d for d in other_diags if d.strip().lower() in target_diags_lower
+        ]
+        shared_meds = [
+            m for m in other_raw_meds if extract_core_drug(m) in target_core_meds_set
+        ]
+
+        # Filter: keep if at least some condition or drug regimen overlap exists
+        if composite <= 0.0 and not shared_diags and not shared_meds:
+            continue
+
+        # Build clinical explainability string
+        rationale_parts = []
+        if shared_diags:
+            diag_names = ", ".join(sorted(set(shared_diags))[:2])
+            rationale_parts.append(f"{len(shared_diags)} condition(s) [{diag_names}] ({round(cond_sim*100)}% match)")
+        if shared_meds:
+            core_names = ", ".join(sorted(set(extract_core_drug(m).title() for m in shared_meds))[:2])
+            rationale_parts.append(f"{len(shared_meds)} shared drug regimen [{core_names}] ({round(drug_sim*100)}% match)")
+        
+        rationale = " • ".join(rationale_parts) if rationale_parts else "Low baseline phenotype alignment."
+
+        name = ((other.get("first_name") or "") + " " + (other.get("last_name") or "")).strip() or other.get("id", "Patient")
+
+        target_diags_set = set(d.strip().lower() for d in target_diags if d and d.strip())
+        other_diags_set = set(d.strip().lower() for d in other_diags if d and d.strip())
+        shared_diags_set = target_diags_set & other_diags_set
+
+        target_meds_set = set(m.strip().lower() for m in target_core_meds if m and m.strip())
+        other_meds_set = set(m.strip().lower() for m in other_core_meds if m and m.strip())
+        shared_meds_set = target_meds_set & other_meds_set
+
+        enriched = dict(other)
+        enriched["name"] = name
+        enriched["similarity"] = round(composite, 3)
+        enriched["condition_similarity"] = cond_sim
+        enriched["drug_similarity"] = drug_sim
+        enriched["overlap"] = len(shared_diags)
+        enriched["drug_overlap"] = len(shared_meds)
+        enriched["shared_diagnoses"] = sorted(set(shared_diags))
+        enriched["shared_medications"] = sorted(set(shared_meds))
+        enriched["target_diag_count"] = len(target_diags_set)
+        enriched["candidate_diag_count"] = len(other_diags_set)
+        enriched["shared_diag_count"] = len(shared_diags_set)
+        enriched["target_drug_count"] = len(target_meds_set)
+        enriched["candidate_drug_count"] = len(other_meds_set)
+        enriched["shared_drug_count"] = len(shared_meds_set)
+        enriched["rationale"] = rationale
+        similar.append(enriched)
+
+    # Sort descending by composite score, then condition similarity, then drug similarity
+    similar.sort(
+        key=lambda r: (r["similarity"], r["condition_similarity"], r["drug_similarity"]),
+        reverse=True,
+    )
+
+    calculation_meta = {
+        "methodology": "Multimodal Clinical Phenotype Vector Space (Dual Cosine Distance)",
+        "formula": f"Match Score = ({int(weight_condition*100)}% × Condition_Cosine) + ({int(weight_drug*100)}% × Drug_Regimen_Cosine)",
+        "weight_condition": weight_condition,
+        "weight_drug": weight_drug,
+        "condition_vocab_size": len(all_conditions),
+        "drug_vocab_size": len(all_drugs),
+        "target_conditions_count": len(target_diags),
+        "target_drugs_count": len(target_core_meds),
+    }
+
+    return similar, calculation_meta
+
 
 
 # ---------------------------------------------------------------------------

@@ -368,12 +368,12 @@ def patient_intelligence(patient_id):
 def patient_treatment_intel(patient_id):
     """Per-patient ranked diagnoses (1..N by success likelihood).
 
-    Scoring is deterministic python (lab-normalized outcome among similar
-    patients sharing each diagnosis); no LLM involved.
+    Supports method='vector' (Multimodal Phenotype Vector Space) or 'cypher' (Legacy Jaccard graph join).
     """
+    method = request.args.get("method", "vector")
     try:
         with neo4j_get_session() as s:
-            data = graph_fetch.get_treatment_intel(s, patient_id)
+            data = graph_fetch.get_treatment_intel(s, patient_id, method=method)
         if data is None:
             return jsonify({"error": f"patient {patient_id} not found"}), 404
         return jsonify(_clean_prop_val(data)), 200
