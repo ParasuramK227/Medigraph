@@ -6,11 +6,17 @@
 
 .chatbot-page__panel {
   height: 620px;
-  max-width: 780px;
+  max-width: 1280px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--color-surface);
+}
+
+@media (max-width: 900px) {
+  .chatbot-page__panel {
+    max-width: 780px;
+  }
 }
 
 @media (max-width: 600px) {

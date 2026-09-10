@@ -84,6 +84,46 @@ def _execute_read_query(session, query, params=None):
     return (keys or []), rows
 
 
+def fetch_cypher_schema(session) -> str:
+    """Return a compact plain-text schema description for LLM prompt injection."""
+    node_result = session.run(
+        "MATCH (n) WITH labels(n) AS l UNWIND l AS label "
+        "WITH label, count(*) AS cnt RETURN label, cnt ORDER BY cnt DESC"
+    )
+    label_counts = [(rec["label"], rec["cnt"]) for rec in node_result]
+
+    # Collect key properties per label
+    label_props: dict[str, list[str]] = {}
+    for label, _ in label_counts:
+        # Labels come from db.labels() — safe for f-string interpolation
+        safe_label = label.replace("`", "")
+        props_result = session.run(
+            f"MATCH (n:`{safe_label}`) RETURN DISTINCT keys(n) AS keys LIMIT 1",
+        )
+        rec = props_result.single()
+        if rec:
+            label_props[label] = rec["keys"]
+
+    rel_result = session.run(
+        "MATCH (a)-[r]->(b) RETURN type(r) AS type, "
+        "head(labels(a)) AS from_label, head(labels(b)) AS to_label, "
+        "count(r) AS cnt ORDER BY cnt DESC"
+    )
+    rels = [(rec["type"], rec["from_label"], rec["to_label"], rec["cnt"]) for rec in rel_result]
+
+    lines = ["Node labels:"]
+    for label, cnt in label_counts:
+        props = label_props.get(label, [])
+        props_str = ", ".join(props[:8])
+        lines.append(f"  {label} ({props_str}) — {cnt} nodes")
+
+    lines.append("\nRelationships:")
+    for rel_type, from_l, to_l, cnt in rels:
+        lines.append(f"  ({from_l})-[:{rel_type}]->({to_l}) — {cnt} edges")
+
+    return "\n".join(lines)
+
+
 # Presets exposed to admin + researcher via /explore. Always read-only and
 # server-authored — arbitrary Cypher remains admin-only (/cypher).
 _GRAPH_PRESETS = {

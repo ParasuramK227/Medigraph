@@ -495,10 +495,20 @@ export async function fetchChatSuggestions(patientId?: string): Promise<Suggesti
   return apiFetch<SuggestionsResponse>(url)
 }
 
+export interface ChatTraversal {
+  columns: string[]
+  rows: unknown[][]
+  row_count: number
+  cypher?: string | null
+  cypher_source?: 'llm' | 'static' | null
+}
+
 export interface ChatResponse {
   answer?: string
   candidate_count?: number
   source_count?: number
+  patient_id?: string | null
+  traversal?: ChatTraversal | null
   error?: string
 }
 

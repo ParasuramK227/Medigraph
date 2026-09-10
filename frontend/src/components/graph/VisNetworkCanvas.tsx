@@ -40,6 +40,7 @@ interface Props {
   edgeLabelZoom?: number
   onNodeClick?: (nodeId: string) => void
   showToolbar?: boolean
+  freezeOnStabilize?: boolean
 }
 
 export function VisNetworkCanvas({
@@ -49,6 +50,7 @@ export function VisNetworkCanvas({
   centerId,
   onNodeClick,
   showToolbar = true,
+  freezeOnStabilize = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const networkRef = useRef<Network | null>(null)
@@ -59,6 +61,8 @@ export function VisNetworkCanvas({
   const truncLabelMapRef = useRef(new Map<string, string>())
   const edgeLabelMapRef = useRef(new Map<string, string>())
   const labelRafRef = useRef<number | null>(null)
+  const physicsEnabledRef = useRef(true)
+  const freezeRef = useRef(false)
 
   const [physicsEnabled, setPhysicsEnabled] = useState(true)
   const [selectedNode, setSelectedNode] = useState<SelectedNodeInfo | null>(null)
@@ -99,6 +103,12 @@ export function VisNetworkCanvas({
   useEffect(() => {
     matchIdRef.current = matchId
   }, [matchId])
+
+  // Mirror physics state into a ref so the network creation effect never needs
+  // to re-run when the toolbar toggles physics (avoids recreating the network).
+  useEffect(() => {
+    physicsEnabledRef.current = physicsEnabled
+  }, [physicsEnabled])
 
   // Recompute on-canvas labels: hidden below the zoom threshold, truncated above
   // it, and shown in full for the currently selected node.
@@ -200,6 +210,8 @@ export function VisNetworkCanvas({
   useEffect(() => {
     if (!containerRef.current) return
 
+    freezeRef.current = false
+
     const visNodes: VisNode[] = nodes.map((n) => {
       const primary = n.labels[0] || 'default'
       const baseColor = labelColor(primary)
@@ -280,7 +292,7 @@ export function VisNetworkCanvas({
         selectionWidth: 2,
       },
       physics: {
-        enabled: physicsEnabled,
+        enabled: physicsEnabledRef.current,
         solver: 'forceAtlas2Based',
         forceAtlas2Based: {
           gravitationalConstant: -40,
@@ -366,8 +378,28 @@ export function VisNetworkCanvas({
       }, 350)
     }
 
+    // Auto-freeze physics after initial stabilization
+    let safetyTimer: ReturnType<typeof setTimeout> | null = null
+    let freezeHandler: (() => void) | null = null
+    if (freezeOnStabilize) {
+      const freeze = () => {
+        if (freezeRef.current) return
+        freezeRef.current = true
+        try {
+          network.stopSimulation()
+          network.setOptions({ physics: { enabled: false } })
+          setPhysicsEnabled(false)
+        } catch {}
+      }
+      freezeHandler = freeze
+      network.once('stabilized', freeze)
+      safetyTimer = setTimeout(freeze, 6000)
+    }
+
     return () => {
       if (focusTimer) clearTimeout(focusTimer)
+      if (safetyTimer) clearTimeout(safetyTimer)
+      if (freezeHandler) network.off('stabilized', freezeHandler)
       if (labelRafRef.current != null) {
         cancelAnimationFrame(labelRafRef.current)
         labelRafRef.current = null
@@ -377,7 +409,8 @@ export function VisNetworkCanvas({
       } catch {}
       networkRef.current = null
     }
-  }, [nodes, edges, matchId, physicsEnabled, centerId, nodeMap, handleSelectNode, refreshLabels])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, edges, matchId, centerId, nodeMap, handleSelectNode, refreshLabels])
 
   // Center on searched node
   useEffect(() => {

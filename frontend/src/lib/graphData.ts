@@ -1,5 +1,5 @@
 import { cleanPersonName } from './formatters'
-import { apiFetch, type CypherResult } from './api'
+import { apiFetch } from './api'
 import type { FEdge, FNode } from '../components/feature/FeatureGraph'
 
 export interface RawGraph {
@@ -72,7 +72,7 @@ export async function fetchPatientGraphRaw(id: string): Promise<RawGraph> {
 }
 
 /** Run a cypher query and convert any node/relationship cells into an FNode/FEdge graph. */
-export function graphFromCypher(result: CypherResult): { nodes: FNode[]; edges: FEdge[] } {
+export function graphFromCypher(result: { rows: unknown[][] }): { nodes: FNode[]; edges: FEdge[] } {
   const nodeMap = new Map<string, RawGraph['nodes'][number]>()
   const rels: RawGraph['relationships'] = []
   for (const row of result.rows) {

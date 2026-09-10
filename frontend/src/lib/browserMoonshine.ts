@@ -1,4 +1,4 @@
-import { AssetDownloader, MicTranscriber, ModelArch, Transcriber } from '@moonshine-ai/moonshine-wasm'
+import { MicTranscriber, ModelArch, Transcriber } from '@moonshine-ai/moonshine-wasm'
 import { blobToAudioBuffer } from './browserWhisper'
 
 // Moonshine Medium Streaming: best-performing English streaming model (~245M params).
@@ -9,6 +9,18 @@ import { blobToAudioBuffer } from './browserWhisper'
 export const MOONSHINE_MODEL_ARCH: ModelArch = ModelArch.MediumStreaming
 export const MOONSHINE_LANG = 'en'
 export const MOONSHINE_MODEL_BASE = '/models/moonshine/'
+
+// Explicit file map for streaming architecture — bypasses the WASM manifest
+// size check so self-hosted files don't need to match CDN byte counts exactly.
+const MOONSHINE_FILES: Record<string, string> = {
+  'encoder.ort': `${MOONSHINE_MODEL_BASE}encoder.ort`,
+  'adapter.ort': `${MOONSHINE_MODEL_BASE}adapter.ort`,
+  'cross_kv.ort': `${MOONSHINE_MODEL_BASE}cross_kv.ort`,
+  'decoder_kv.ort': `${MOONSHINE_MODEL_BASE}decoder_kv.ort`,
+  'frontend.ort': `${MOONSHINE_MODEL_BASE}frontend.ort`,
+  'streaming_config.json': `${MOONSHINE_MODEL_BASE}streaming_config.json`,
+  'tokenizer.bin': `${MOONSHINE_MODEL_BASE}tokenizer.bin`,
+}
 
 export interface MoonshineMicOptions {
   onText: (text: string) => void
@@ -21,9 +33,18 @@ export interface MoonshineMicOptions {
  * Builds a live Moonshine transcriber from the self-hosted model files
  * and starts listening on the microphone. Everything happens on-device.
  */
+/** Clear stale Moonshine model caches from previous failed loads. */
+async function clearStaleMoonshineCaches(): Promise<void> {
+  if (typeof caches === 'undefined') return
+  for (const name of ['moonshine-models-v1', 'moonshine-models']) {
+    try { await caches.delete(name) } catch { /* ignore */ }
+  }
+}
+
 export async function startMoonshineMic(opts: MoonshineMicOptions): Promise<MicTranscriber> {
+  await clearStaleMoonshineCaches()
   const mic = new MicTranscriber()
-    .modelsFrom(MOONSHINE_MODEL_BASE)
+    .modelsFrom(MOONSHINE_FILES)
     .language(MOONSHINE_LANG)
     .modelArch(MOONSHINE_MODEL_ARCH)
     .onText((text) => opts.onText(text))
@@ -72,10 +93,9 @@ export async function transcribeFileWithMoonshine(
   }
 
   if (onProgress) onProgress('Loading Moonshine model (Medium Streaming) in browser...')
-  const transcriber = await Transcriber.load({
-    language: MOONSHINE_LANG,
+  await clearStaleMoonshineCaches()
+  const transcriber = await Transcriber.loadFromUrls(MOONSHINE_FILES, {
     modelArch: MOONSHINE_MODEL_ARCH,
-    downloader: new AssetDownloader({ baseUrl: MOONSHINE_MODEL_BASE }),
     onProgress: (loaded, total) => {
       if (onProgress && typeof total === 'number' && total > 0) {
         onProgress(`Loading Moonshine model: ${Math.round((loaded / total) * 100)}%`)

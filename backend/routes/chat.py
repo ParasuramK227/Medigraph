@@ -5,7 +5,9 @@ from dotenv import load_dotenv
 from flask import Blueprint, request, jsonify
 
 from backend.auth_utils import require_auth
+from backend.chat_privacy import deidentify_profile, deidentify_cohort, deidentify_message
 from backend.neo4j_connection import get_session as neo4j_get_session
+from backend.routes.graph import _serialize_value, fetch_cypher_schema
 
 load_dotenv()
 
@@ -28,6 +30,31 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _damerau_levenshtein(a: str, b: str) -> int:
+    """Damerau–Levenshtein edit distance (insert/delete/substitute/transpose)."""
+    n, m = len(a), len(b)
+    if n == 0:
+        return m
+    if m == 0:
+        return n
+    prev2 = list(range(-1, n))
+    prev1 = list(range(0, n + 1))
+    for j in range(1, m + 1):
+        cur = [0] * (n + 1)
+        cur[0] = j
+        for i in range(1, n + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            cur[i] = min(
+                cur[i - 1] + 1,           # deletion
+                prev1[i] + 1,             # insertion
+                prev1[i - 1] + cost,      # substitution
+            )
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                cur[i] = min(cur[i], prev2[i - 2] + 1)  # transposition
+        prev2, prev1 = prev1, cur
+    return prev1[n]
+
+
 def _detect_patient_id(session, message: str) -> str | None:
     """Detect if a user mentioned a specific patient's name or UUID in the prompt."""
     if not message:
@@ -39,19 +66,47 @@ def _detect_patient_id(session, message: str) -> str | None:
     if uuid_match:
         return uuid_match.group(0)
 
-    # Check for partial name match against Patient nodes
     tokens = [t.lower() for t in re.findall(r"\b[A-Za-z]{3,}\b", cleaned)]
     if not tokens:
         return None
 
+    # Scored match: exact word hits rank above substring hits so the intended
+    # patient beats lookalike names (e.g. "Angel" over "Angelina").
     query = """
     MATCH (p:Patient)
-    WHERE any(t IN $tokens WHERE toLower(p.first_name) CONTAINS t OR toLower(p.last_name) CONTAINS t)
-    RETURN p.id AS id
+    WITH p,
+         [w IN split(toLower(coalesce(p.first_name, '') + ' ' + coalesce(p.last_name, '')), ' ') WHERE w <> ''] AS name_words
+    WHERE any(t IN $tokens WHERE any(w IN name_words WHERE w CONTAINS t OR t CONTAINS w))
+    RETURN p.id AS id,
+           size([t IN $tokens WHERE any(w IN name_words WHERE w = t)]) AS exact_hits,
+           size([t IN $tokens WHERE any(w IN name_words WHERE w CONTAINS t OR t CONTAINS w)]) AS token_hits
+    ORDER BY exact_hits DESC, token_hits DESC, p.id
     LIMIT 1
     """
-    rec = session.run(query, tokens=tokens).single()
-    return rec["id"] if rec else None
+    top = session.run(query, tokens=tokens).single()
+    if top and top["token_hits"] >= 1 and (top["exact_hits"] >= 1 or top["token_hits"] >= 2):
+        return top["id"]
+
+    # Typo-tolerant fallback over the full (small) patient name list.
+    rows = list(session.run(
+        "MATCH (p:Patient) WHERE p.first_name IS NOT NULL OR p.last_name IS NOT NULL "
+        "RETURN p.id AS id, coalesce(toLower(p.first_name), '') AS first, coalesce(toLower(p.last_name), '') AS last"
+    ))
+    best: tuple | None = None
+    for row in rows:
+        name_words = [w for w in (row["first"], row["last"]) if w]
+        hit_count = 0
+        total_dist = 0
+        for tok in tokens:
+            d = min((_damerau_levenshtein(tok, w) for w in name_words), default=99)
+            if d <= 1:
+                hit_count += 1
+                total_dist += d
+        if hit_count > 0:
+            cand = (-hit_count, total_dist, row["id"])
+            if best is None or cand < best:
+                best = cand
+    return best[2] if best else None
 
 
 def _fetch_patient_profile(session, patient_id: str) -> dict | None:
@@ -131,6 +186,172 @@ def _fetch_cohort_context(session, message: str) -> dict:
         "abnormal_labs": abnormal_labs,
         "recent_notes": notes,
     }
+
+
+def _fetch_traversal(session, has_patient: bool, patient_id: str | None) -> dict:
+    """Return the raw graph nodes/relationships the chatbot actually consulted.
+
+    Scoped identically to the context queries so the side panel reflects the
+    real traversal path used to answer the current question. Serialized in the
+    same shape as /graph/cypher so the frontend can reuse graphFromCypher().
+    """
+    if has_patient:
+        query = """
+        MATCH (p:Patient {id: $pid})
+        OPTIONAL MATCH (p)-[hd:HAS_DIAGNOSIS]->(d:Disease)
+        OPTIONAL MATCH (m:Medication)-[tr:TREATS]->(d)
+        OPTIONAL MATCH (p)-[tt:RECEIVED_TREATMENT]->(t:Treatment)
+        OPTIONAL MATCH (p)-[hl:HAS_LAB_TEST]->(l:LabTest)
+        OPTIONAL MATCH (p)-[ha:HAS_ALLERGY]->(a:Allergy)
+        OPTIONAL MATCH (doc:Doctor)-[dt:TREATS]->(p)
+        OPTIONAL MATCH (p)-[hc:HAS_CONSULTATION_NOTE]->(n:ConsultationNote)
+        OPTIONAL MATCH (n)-[md:MENTIONS_DIAGNOSIS]->(md_d:Disease)
+        OPTIONAL MATCH (n)-[dm:DISCUSSES_MEDICATION]->(dm_m:Medication)
+        RETURN p, hd, d, m, tr, tt, t, hl, l, ha, a, doc, dt, hc, n, md, md_d, dm, dm_m
+        LIMIT 120
+        """
+        params = {"pid": patient_id}
+    else:
+        query = """
+        MATCH (d:Disease)
+        MATCH (p:Patient)-[hd:HAS_DIAGNOSIS]->(d)
+        OPTIONAL MATCH (m:Medication)-[tr:TREATS]->(d)
+        OPTIONAL MATCH (t:Treatment)-[tt:TREATS]->(d)
+        OPTIONAL MATCH (pl:Patient)-[hl:HAS_LAB_TEST]->(l:LabTest {status: 'abnormal'})
+        OPTIONAL MATCH (nl:Patient)-[nc:HAS_CONSULTATION_NOTE]->(n:ConsultationNote)
+        RETURN p, hd, d, m, tr, t, tt, pl, hl, l, nl, nc, n
+        LIMIT 150
+        """
+        params = {}
+
+    result = session.run(query, **params)
+    keys = None
+    rows = []
+    for rec in result:
+        row_keys = list(rec.keys())
+        if keys is None:
+            keys = row_keys
+        rows.append([_serialize_value(rec[k]) for k in row_keys])
+
+    return {
+        "columns": keys or [],
+        "rows": rows,
+        "row_count": len(rows),
+        "cypher": query.strip(),
+        "cypher_source": "static",
+    }
+
+
+_CYPHER_SYSTEM_PROMPT = (
+    "You are a Neo4j Cypher query generator for a medical knowledge graph.\n\n"
+    "Given the user's clinical question and the graph schema below, generate a single\n"
+    "read-only Cypher query that retrieves the most relevant graph data to answer the\n"
+    "question.\n\n"
+    "Rules:\n"
+    "1. Only use MATCH and OPTIONAL MATCH — never CREATE, DELETE, MERGE, SET, or DROP.\n"
+    "2. RETURN full node and relationship objects (e.g. RETURN p, d, hd) so the\n"
+    "   frontend can render them as a graph. Do NOT return only aggregated property\n"
+    "   values like count() or collect() — include the raw nodes/relationships.\n"
+    "3. Include a LIMIT of 150 rows.\n"
+    "4. Output ONLY the raw Cypher query. No explanation, no markdown fences, no commentary.\n"
+)
+
+# Blocklist patterns for generated Cypher validation
+_CYPHER_BLOCKLIST = re.compile(
+    r"\b(CREATE|DELETE|MERGE|SET|DROP|REMOVE|DETACH|"
+    r"LOAD\s+CSV|CALL|START|INDEX|CONSTRAINT|GRANT|REVOKE|"
+    r"USING\s+PERIODIC\s+COMMIT)\b",
+    re.IGNORECASE,
+)
+
+
+def _validate_cypher(cypher: str) -> bool:
+    """Return True if the generated Cypher is safe to execute (read-only MATCH only)."""
+    if not cypher or len(cypher) > 500:
+        return False
+    if _CYPHER_BLOCKLIST.search(cypher):
+        return False
+    stripped = cypher.lstrip()
+    if not re.match(r"(?:MATCH|OPTIONAL\s+MATCH)\b", stripped, re.IGNORECASE):
+        return False
+    if not re.search(r"\bRETURN\b", cypher, re.IGNORECASE):
+        return False
+    return True
+
+
+def _generate_cypher_for_cohort(
+    session, user_message: str, patient_id: str | None = None,
+) -> str | None:
+    """LLM Call 1: generate a Cypher query scoped to the user's question."""
+    api_key = os.environ.get("GROQ_API_KEY_CHATBOT") or os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        return None
+
+    try:
+        schema = fetch_cypher_schema(session)
+    except Exception:
+        return None
+
+    context = f"Graph Schema:\n{schema}\n\n"
+    if patient_id:
+        context += f"The question is about patient ID {patient_id}. "
+        context += "Generate a Cypher query that starts from this patient and "
+        context += "traverses their clinical connections.\n\n"
+    context += f"User Question: {user_message}"
+
+    try:
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": MODEL,
+                "temperature": 0.0,
+                "max_tokens": 300,
+                "messages": [
+                    {"role": "system", "content": _CYPHER_SYSTEM_PROMPT},
+                    {"role": "user", "content": context},
+                ],
+            },
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            return None
+        raw = resp.json()["choices"][0]["message"]["content"].strip()
+        # Strip markdown fences if the LLM wraps them anyway
+        raw = re.sub(r"^```(?:cypher)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+        return raw.strip()
+    except Exception:
+        return None
+
+
+def _fetch_dynamic_traversal(
+    session, user_message: str, patient_id: str | None = None,
+) -> dict | None:
+    """Generate a question-scoped Cypher, validate, execute, and return traversal rows.
+
+    Returns None if generation, validation, or execution fails — caller should
+    fall back to the static traversal.
+    """
+    cypher = _generate_cypher_for_cohort(session, user_message, patient_id=patient_id)
+    if not cypher or not _validate_cypher(cypher):
+        return None
+
+    try:
+        keys, rows = None, []
+        result = session.run(cypher)
+        for rec in result:
+            if keys is None:
+                keys = list(rec.keys())
+            rows.append([_serialize_value(rec[k]) for k in rec.keys()])
+        if not rows:
+            return None
+        return {"columns": keys or [], "rows": rows, "row_count": len(rows), "cypher": cypher, "cypher_source": "llm"}
+    except Exception:
+        return None
 
 
 def _build_context_text(profile: dict | None, cohort: dict | None) -> str:
@@ -292,6 +513,27 @@ def chat_query():
                 profile = _fetch_patient_profile(session, patient_id)
 
             cohort = _fetch_cohort_context(session, message)
+
+            # Dynamic traversal (LLM-generated Cypher) with fallback to static.
+            traversal = _fetch_dynamic_traversal(session, message, patient_id=patient_id)
+            if traversal is None:
+                traversal = _fetch_traversal(
+                    session,
+                    has_patient=patient_id is not None,
+                    patient_id=patient_id,
+                )
+
+            # --- PHI de-identification before LLM call -----------------------
+            patient_name_for_msg = None
+            if profile:
+                patient_name_for_msg = profile.get("name")
+                profile, _ = deidentify_profile(profile)
+            cohort = deidentify_cohort(cohort)
+            message = deidentify_message(
+                message,
+                patient_name=patient_name_for_msg,
+            )
+
             context = _build_context_text(profile, cohort)
     except Exception as e:
         return jsonify({"error": f"Could not query clinical knowledge graph: {e}"}), 500
@@ -311,6 +553,7 @@ def chat_query():
             "answer": "\n".join(fallback_lines),
             "candidate_count": 1,
             "source_count": 1,
+            "traversal": traversal,
         })
 
     try:
@@ -347,4 +590,5 @@ def chat_query():
         "patient_name": profile["name"] if profile else None,
         "candidate_count": len(cohort.get("top_diseases", [])) + (1 if profile else 0),
         "source_count": len(cohort.get("recent_notes", [])) + (len(profile.get("labs", [])) if profile else 0),
+        "traversal": traversal,
     })

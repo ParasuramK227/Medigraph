@@ -9,9 +9,11 @@ const FeatureGraph = React.lazy(() =>
 interface Props {
   nodes: FNode[]
   edges: FEdge[]
-  height?: number
+  height?: number | string
   centerId?: string
   edgeLabelZoom?: number
+  showToolbar?: boolean
+  freezeOnStabilize?: boolean
 }
 
 export function LazyFeatureGraph(props: Props) {

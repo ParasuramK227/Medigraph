@@ -7,9 +7,26 @@ import { BackendStatus } from './BackendStatus'
 import { ChatFloatingButton } from '../chat/ChatFloatingButton'
 import './AppLayout.css'
 
+const COLLAPSE_KEY = 'medigraph.navCollapsed'
+
 export function AppLayout() {
   const [navOpen, setNavOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState(
+    () => window.localStorage.getItem(COLLAPSE_KEY) === '1',
+  )
   const location = useLocation()
+
+  const toggleNav = () => {
+    if (window.matchMedia('(min-width: 769px)').matches) {
+      setCollapsed((c) => {
+        const next = !c
+        window.localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0')
+        return next
+      })
+    } else {
+      setNavOpen(true)
+    }
+  }
 
   // Close navigation drawer when route changes
   useEffect(() => {
@@ -39,7 +56,7 @@ export function AppLayout() {
         />
       )}
 
-      <aside className={`app-layout__nav ${navOpen ? 'app-layout__nav--open' : ''}`}>
+      <aside className={`app-layout__nav ${navOpen ? 'app-layout__nav--open' : ''} ${collapsed ? 'app-layout__nav--collapsed' : ''}`}>
         <SideNav onClose={() => setNavOpen(false)} />
       </aside>
 
@@ -48,8 +65,9 @@ export function AppLayout() {
           <button
             type="button"
             className="app-layout__menu"
-            onClick={() => setNavOpen(true)}
-            aria-label="Open navigation"
+            onClick={toggleNav}
+            aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+            title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
           >
             <Menu size={22} aria-hidden />
           </button>

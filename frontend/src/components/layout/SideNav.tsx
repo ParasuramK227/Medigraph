@@ -105,6 +105,7 @@ export function SideNav({ onClose }: SideNavProps) {
                     to={item.to}
                     end={item.end}
                     onClick={onClose}
+                    title={item.label}
                     className={({ isActive }) =>
                       isActive ? 'sidenav__link sidenav__link--active' : 'sidenav__link'
                     }
