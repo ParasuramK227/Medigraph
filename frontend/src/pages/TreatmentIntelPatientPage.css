@@ -1314,3 +1314,57 @@
   font-style: italic;
   padding: 6px 10px;
 }
+
+
+/* IDF Weight Tag Styles */
+.tii__vc-table-header {
+  grid-template-columns: 1fr 180px 60px 60px 140px !important;
+}
+
+.tii__vc-row {
+  grid-template-columns: 1fr 180px 60px 60px 140px !important;
+}
+
+.tii__vc-col-weight {
+  text-align: left;
+  padding-left: 4px;
+}
+
+.tii__vc-weight-col {
+  display: flex;
+  align-items: center;
+}
+
+.tii__vc-weight-tag {
+  font-family: ui-monospace, monospace;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.tii__vc-weight-tag--high {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.tii__vc-weight-tag--med {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.tii__vc-weight-tag--low {
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.1);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.tii__math-subnote {
+  font-size: 0.7rem;
+  color: #94a3b8;
+  font-style: italic;
+  font-family: system-ui, sans-serif;
+}

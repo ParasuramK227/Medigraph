@@ -355,6 +355,8 @@ export interface CalculationMeta {
   drug_vocab_size: number
   target_conditions_count: number
   target_drugs_count: number
+  condition_weights?: Record<string, number>
+  drug_weights?: Record<string, number>
 }
 export interface SimilarPatient {
   id: string
@@ -374,6 +376,12 @@ export interface SimilarPatient {
   target_drug_count?: number
   candidate_drug_count?: number
   shared_drug_count?: number
+  cond_dot?: number
+  cond_norm_tgt?: number
+  cond_norm_cand?: number
+  drug_dot?: number
+  drug_norm_tgt?: number
+  drug_norm_cand?: number
   rationale?: string
 }
 export interface TreatmentIntel {

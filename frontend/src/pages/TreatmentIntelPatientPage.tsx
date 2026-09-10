@@ -39,12 +39,16 @@ function PatientVectorComparator({
   candidateDiagnoses,
   candidateMedications,
   candidateRank,
+  conditionWeights = {},
+  drugWeights = {},
 }: {
   targetDiagnoses: string[]
   targetMedications: string[]
   candidateDiagnoses: string[]
   candidateMedications: string[]
   candidateRank: number
+  conditionWeights?: Record<string, number>
+  drugWeights?: Record<string, number>
 }) {
   // Conditions set and map
   const targetCondSet = new Set((targetDiagnoses || []).map((d) => d.trim().toLowerCase()))
@@ -113,20 +117,30 @@ function PatientVectorComparator({
         <div className="tii__vc-table">
           <div className="tii__vc-table-header">
             <span className="tii__vc-col-feat">Clinical Condition Feature</span>
+            <span className="tii__vc-col-weight">Clinical IDF Weight</span>
             <span className="tii__vc-col-bit" title="Target Patient Vector Bit">Target v<sub>tgt</sub></span>
             <span className="tii__vc-col-bit" title="Candidate Vector Bit">Match v<sub>{candidateRank}</sub></span>
-            <span className="tii__vc-col-status">Dot Product State</span>
+            <span className="tii__vc-col-status">Alignment</span>
           </div>
           {allConditions.map(([key, label]) => {
             const inTgt = targetCondSet.has(key)
             const inCand = candCondSet.has(key)
             const isMatch = inTgt && inCand
+            const weight = conditionWeights[key] || 0.5
+            const weightCategory = weight >= 0.65 ? 'high' : weight >= 0.35 ? 'med' : 'low'
+            const weightLabel = weight >= 0.65 ? 'High Specificity' : weight >= 0.35 ? 'Moderate' : 'Common Baseline'
+
             return (
               <div
                 className={`tii__vc-row ${isMatch ? 'tii__vc-row--match' : ''}`}
                 key={key}
               >
                 <span className="tii__vc-feat-name">{label}</span>
+                <span className="tii__vc-weight-col">
+                  <span className={`tii__vc-weight-tag tii__vc-weight-tag--${weightCategory}`}>
+                    w = {weight.toFixed(2)} ({weightLabel})
+                  </span>
+                </span>
                 <span className={`tii__vc-bit ${inTgt ? 'tii__vc-bit--1' : 'tii__vc-bit--0'}`}>
                   {inTgt ? '1' : '0'}
                 </span>
@@ -135,7 +149,7 @@ function PatientVectorComparator({
                 </span>
                 <span className="tii__vc-status">
                   {isMatch ? (
-                    <span className="tii__vc-badge tii__vc-badge--match">1 • 1 (Cosine +)</span>
+                    <span className="tii__vc-badge tii__vc-badge--match">1 • 1 (w² = {(weight*weight).toFixed(3)})</span>
                   ) : inTgt ? (
                     <span className="tii__vc-badge tii__vc-badge--target">1 • 0 (Target)</span>
                   ) : (
@@ -164,20 +178,30 @@ function PatientVectorComparator({
           <div className="tii__vc-table">
             <div className="tii__vc-table-header">
               <span className="tii__vc-col-feat">Active Pharmacotherapy Regimen</span>
+              <span className="tii__vc-col-weight">Clinical IDF Weight</span>
               <span className="tii__vc-col-bit" title="Target Patient Vector Bit">Target v<sub>tgt</sub></span>
               <span className="tii__vc-col-bit" title="Candidate Vector Bit">Match v<sub>{candidateRank}</sub></span>
-              <span className="tii__vc-col-status">Dot Product State</span>
+              <span className="tii__vc-col-status">Alignment</span>
             </div>
             {allDrugs.map(([key, label]) => {
               const inTgt = targetDrugSet.has(key)
               const inCand = candDrugSet.has(key)
               const isMatch = inTgt && inCand
+              const weight = drugWeights[key] || 0.5
+              const weightCategory = weight >= 0.65 ? 'high' : weight >= 0.35 ? 'med' : 'low'
+              const weightLabel = weight >= 0.65 ? 'High Specificity' : weight >= 0.35 ? 'Moderate' : 'Common Baseline'
+
               return (
                 <div
                   className={`tii__vc-row ${isMatch ? 'tii__vc-row--match' : ''}`}
                   key={key}
                 >
                   <span className="tii__vc-feat-name">{label}</span>
+                  <span className="tii__vc-weight-col">
+                    <span className={`tii__vc-weight-tag tii__vc-weight-tag--${weightCategory}`}>
+                      w = {weight.toFixed(2)} ({weightLabel})
+                    </span>
+                  </span>
                   <span className={`tii__vc-bit ${inTgt ? 'tii__vc-bit--1' : 'tii__vc-bit--0'}`}>
                     {inTgt ? '1' : '0'}
                   </span>
@@ -186,7 +210,7 @@ function PatientVectorComparator({
                   </span>
                   <span className="tii__vc-status">
                     {isMatch ? (
-                      <span className="tii__vc-badge tii__vc-badge--match">1 • 1 (Cosine +)</span>
+                      <span className="tii__vc-badge tii__vc-badge--match">1 • 1 (w² = {(weight*weight).toFixed(3)})</span>
                     ) : inTgt ? (
                       <span className="tii__vc-badge tii__vc-badge--target">1 • 0 (Target)</span>
                     ) : (
@@ -505,13 +529,14 @@ export function TreatmentIntelPatientPage() {
             {method === 'vector' ? (
               <>
                 <div className="tii__inspector-formula-box">
-                  <div className="tii__formula-label">Continuous Phenotype Distance Formula:</div>
+                  <div className="tii__formula-label">Continuous Clinical TF-IDF Distance Formula:</div>
                   <div className="tii__formula-code">
-                    Similarity(P<sub>target</sub>, P<sub>i</sub>) = (0.50 × Cosine(C<sub>target</sub>, C<sub>i</sub>)) + (0.50 × Cosine(D<sub>target</sub>, D<sub>i</sub>))
+                    Similarity(P<sub>target</sub>, P<sub>i</sub>) = (0.50 × Cosine<sub>IDF</sub>(C<sub>target</sub>, C<sub>i</sub>)) + (0.50 × Cosine<sub>IDF</sub>(D<sub>target</sub>, D<sub>i</sub>))
                   </div>
                   <p className="tii__formula-desc">
-                    Where <strong>C</strong> is the sparse multi-hot Condition Vector (ICD concepts) and <strong>D</strong> is the Pharmacotherapy
-                    Regimen Vector (RxNorm active drug entities). Dot products are computed in O(N) linear time, avoiding combinatorial Cypher join bottlenecks.
+                    Features are weighted by <strong>Inverse Patient Frequency (IDF)</strong> across the entire hospital cohort: 
+                    IDF(t) = ln(1 + N / (1 + DF(t))). Ubiquitous drugs and common symptoms receive lower baseline weights (~0.15–0.30), 
+                    while high-risk, specialized medications (e.g. Chemotherapy, Biologics, Insulin) and distinctive diagnoses carry higher similarity impact (~0.75–1.0).
                   </p>
                 </div>
 
@@ -646,37 +671,48 @@ export function TreatmentIntelPatientPage() {
 
                     {method === 'vector' ? (
                       <div className="tii__math-steps">
-                        {/* Step 1: Condition Cosine */}
+                        {/* Step 1: Clinical TF-IDF Weighted Condition Cosine */}
                         <div className="tii__math-step">
                           <div className="tii__math-step-title">
-                            <span className="tii__step-num">Step 1:</span> Condition Vector Cosine Distance
+                            <span className="tii__step-num">Step 1:</span> Condition Vector Cosine (Inverse Patient Frequency Weighted)
                           </div>
                           <div className="tii__math-formula">
-                            Cosine(C<sub>tgt</sub>, C<sub>{index + 1}</sub>) = |C<sub>tgt</sub> ∩ C<sub>{index + 1}</sub>| / (√|C<sub>tgt</sub>| × √|C<sub>{index + 1}</sub>|)
+                            Cosine<sub>IDF</sub>(C<sub>tgt</sub>, C<sub>{index + 1}</sub>) = (∑<sub>t ∈ C<sub>tgt</sub> ∩ C<sub>{index + 1}</sub></sub> w<sub>t</sub>²) / (||v<sub>tgt</sub>|| × ||v<sub>{index + 1}</sub>||)
                           </div>
                           <div className="tii__math-eval">
-                            = {s.shared_diag_count ?? s.overlap} / (√{s.target_diag_count ?? data.diagnoses.length} × √{s.candidate_diag_count ?? s.overlap})
-                            <br />
-                            = {s.shared_diag_count ?? s.overlap} / {(Math.sqrt(s.target_diag_count || data.diagnoses.length || 1) * Math.sqrt(s.candidate_diag_count || s.overlap || 1)).toFixed(3)}
-                            {' '}= <strong>{condPct}%</strong> (score: {s.condition_similarity ?? 0})
+                            {s.cond_dot != null && s.cond_norm_tgt != null && s.cond_norm_cand != null ? (
+                              <>
+                                = {s.cond_dot.toFixed(3)} / ({s.cond_norm_tgt.toFixed(3)} × {s.cond_norm_cand.toFixed(3)})
+                                <br />
+                                = {s.cond_dot.toFixed(3)} / {(s.cond_norm_tgt * s.cond_norm_cand).toFixed(3)}
+                                {' '}= <strong>{condPct}%</strong> (score: {s.condition_similarity ?? 0})
+                                <span className="tii__math-subnote"> ({s.shared_diag_count ?? s.overlap} shared conditions, rarity-scaled)</span>
+                              </>
+                            ) : (
+                              <>
+                                = {s.shared_diag_count ?? s.overlap} shared / (√{s.target_diag_count ?? data.diagnoses.length} × √{s.candidate_diag_count ?? s.overlap})
+                                = <strong>{condPct}%</strong> (score: {s.condition_similarity ?? 0})
+                              </>
+                            )}
                           </div>
                         </div>
 
-                        {/* Step 2: Pharmacotherapy Cosine */}
+                        {/* Step 2: Clinical TF-IDF Weighted Pharmacotherapy Cosine */}
                         <div className="tii__math-step">
                           <div className="tii__math-step-title">
-                            <span className="tii__step-num">Step 2:</span> Pharmacotherapy Regimen Cosine Distance
+                            <span className="tii__step-num">Step 2:</span> Drug Regimen Cosine (Inverse Patient Frequency Weighted)
                           </div>
                           <div className="tii__math-formula">
-                            Cosine(D<sub>tgt</sub>, D<sub>{index + 1}</sub>) = |D<sub>tgt</sub> ∩ D<sub>{index + 1}</sub>| / (√|D<sub>tgt</sub>| × √|D<sub>{index + 1}</sub>|)
+                            Cosine<sub>IDF</sub>(D<sub>tgt</sub>, D<sub>{index + 1}</sub>) = (∑<sub>m ∈ D<sub>tgt</sub> ∩ D<sub>{index + 1}</sub></sub> w<sub>m</sub>²) / (||v<sub>tgt</sub>|| × ||v<sub>{index + 1}</sub>||)
                           </div>
                           <div className="tii__math-eval">
-                            {(s.target_drug_count ?? 0) > 0 && (s.candidate_drug_count ?? 0) > 0 ? (
+                            {s.drug_dot != null && s.drug_norm_tgt != null && s.drug_norm_cand != null && (s.drug_norm_tgt * s.drug_norm_cand > 0) ? (
                               <>
-                                = {s.shared_drug_count ?? s.drug_overlap ?? 0} / (√{s.target_drug_count} × √{s.candidate_drug_count})
+                                = {s.drug_dot.toFixed(3)} / ({s.drug_norm_tgt.toFixed(3)} × {s.drug_norm_cand.toFixed(3)})
                                 <br />
-                                = {s.shared_drug_count ?? s.drug_overlap ?? 0} / {(Math.sqrt(s.target_drug_count || 1) * Math.sqrt(s.candidate_drug_count || 1)).toFixed(3)}
+                                = {s.drug_dot.toFixed(3)} / {(s.drug_norm_tgt * s.drug_norm_cand).toFixed(3)}
                                 {' '}= <strong>{drugPct}%</strong> (score: {s.drug_similarity ?? 0})
+                                <span className="tii__math-subnote"> ({s.shared_drug_count ?? s.drug_overlap ?? 0} shared regimens, rarity-scaled)</span>
                               </>
                             ) : (
                               <>
@@ -692,7 +728,7 @@ export function TreatmentIntelPatientPage() {
                             <span className="tii__step-num">Step 3:</span> Weighted Composite Clinical Score
                           </div>
                           <div className="tii__math-formula">
-                            Score = (0.50 × Cosine<sub>Cond</sub>) + (0.50 × Cosine<sub>Drug</sub>)
+                            Score = (0.50 × Cosine<sub>Cond,IDF</sub>) + (0.50 × Cosine<sub>Drug,IDF</sub>)
                           </div>
                           <div className="tii__math-eval">
                             = (0.50 × {s.condition_similarity ?? 0}) + (0.50 × {s.drug_similarity ?? 0})
@@ -741,6 +777,8 @@ export function TreatmentIntelPatientPage() {
                       candidateDiagnoses={s.diagnoses || s.shared_diagnoses || []}
                       candidateMedications={s.medications || s.shared_medications || []}
                       candidateRank={index + 1}
+                      conditionWeights={data.calculation_meta?.condition_weights}
+                      drugWeights={data.calculation_meta?.drug_weights}
                     />
                   )}
 

@@ -421,6 +421,12 @@ def get_treatment_intel(session, patient_id: str, method: str = "vector") -> Opt
                 "shared_drug_count": s.get("shared_drug_count", s.get("drug_overlap", 0)),
                 "diagnoses": s.get("diagnoses", []),
                 "medications": s.get("medications", []),
+                "cond_dot": s.get("cond_dot"),
+                "cond_norm_tgt": s.get("cond_norm_tgt"),
+                "cond_norm_cand": s.get("cond_norm_cand"),
+                "drug_dot": s.get("drug_dot"),
+                "drug_norm_tgt": s.get("drug_norm_tgt"),
+                "drug_norm_cand": s.get("drug_norm_cand"),
                 "rationale": s.get("rationale", ""),
             }
             for s in similar

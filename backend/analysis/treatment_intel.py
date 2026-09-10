@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 
+from collections import defaultdict
 import math
 import re
 
@@ -32,6 +33,90 @@ def extract_core_drug(med: str) -> str:
     if match and len(match.group(1).strip()) > 2:
         return match.group(1).strip().lower()
     return cleaned.strip().lower()
+
+
+
+
+def compute_cohort_idf(
+    all_patients: List[Dict[str, Any]]
+) -> Tuple[Dict[str, float], Dict[str, float]]:
+    """Compute Inverse Patient Frequency (IDF) weights for conditions and active drugs.
+    
+    Formula:
+      IDF(t) = ln(1 + (N / (1 + DF(t))))
+    Where:
+      N = total patients in population
+      DF(t) = number of patients presenting condition/drug t
+    
+    Weights are normalized to [0.15, 1.0] so rare, high-specificity conditions
+    and critical drugs (e.g. Chemotherapy, Galantamine, Insulin) receive high weights (~0.75-1.0),
+    while universal baseline terms (e.g. routine checkups, Sodium Fluoride, Acetaminophen) receive lower weights (~0.15-0.35).
+    """
+    total_n = max(len(all_patients), 1)
+    cond_df: Dict[str, int] = defaultdict(int)
+    drug_df: Dict[str, int] = defaultdict(int)
+
+    for p in all_patients:
+        p_diags = {d.strip().lower() for d in (p.get("diagnoses") or []) if d and d.strip()}
+        for d in p_diags:
+            cond_df[d] += 1
+        p_meds = {extract_core_drug(m) for m in (p.get("medications") or []) if extract_core_drug(m)}
+        for m in p_meds:
+            drug_df[m] += 1
+
+    cond_raw_idf: Dict[str, float] = {}
+    for d, df in cond_df.items():
+        cond_raw_idf[d] = math.log(1.0 + (total_n / (1.0 + df)))
+
+    drug_raw_idf: Dict[str, float] = {}
+    for m, df in drug_df.items():
+        drug_raw_idf[m] = math.log(1.0 + (total_n / (1.0 + df)))
+
+    def normalize_idf_dict(raw_dict: Dict[str, float]) -> Dict[str, float]:
+        if not raw_dict:
+            return {}
+        max_v = max(raw_dict.values())
+        min_v = min(raw_dict.values())
+        if max_v == min_v:
+            return {k: 0.5 for k in raw_dict}
+        out = {}
+        for k, v in raw_dict.items():
+            norm = 0.15 + 0.85 * ((v - min_v) / (max_v - min_v))
+            out[k] = round(norm, 3)
+        return out
+
+    cond_weights = normalize_idf_dict(cond_raw_idf)
+    drug_weights = normalize_idf_dict(drug_raw_idf)
+    return cond_weights, drug_weights
+
+
+def weighted_cosine_similarity(
+    items_a: List[str],
+    items_b: List[str],
+    weights: Dict[str, float],
+    default_weight: float = 0.5,
+) -> Tuple[float, float, float, float]:
+    """Compute exact Clinical TF-IDF weighted Cosine Similarity.
+    
+    Returns (similarity, dot_product, norm_a, norm_b):
+      Cosine = sum(w(t)^2 for t in A ∩ B) / (sqrt(sum(w(t)^2 for t in A)) * sqrt(sum(w(t)^2 for t in B)))
+    """
+    sa = set(x.strip().lower() for x in (items_a or []) if x and x.strip())
+    sb = set(x.strip().lower() for x in (items_b or []) if x and x.strip())
+    if not sa or not sb:
+        return 0.0, 0.0, 0.0, 0.0
+
+    shared = sa & sb
+    norm_a = math.sqrt(sum((weights.get(x, default_weight) ** 2) for x in sa))
+    norm_b = math.sqrt(sum((weights.get(x, default_weight) ** 2) for x in sb))
+
+    if not shared:
+        return 0.0, 0.0, round(norm_a, 3), round(norm_b, 3)
+
+    dot = sum((weights.get(x, default_weight) ** 2) for x in shared)
+    denom = norm_a * norm_b
+    sim = round(dot / denom, 3) if denom > 0 else 0.0
+    return sim, round(dot, 3), round(norm_a, 3), round(norm_b, 3)
 
 
 def cosine_similarity(items_a: List[str], items_b: List[str]) -> float:
@@ -117,6 +202,9 @@ def compute_multimodal_patient_similarity(
     target_raw_meds = [m for m in (target.get("medications") or []) if m]
     target_core_meds = [extract_core_drug(m) for m in target_raw_meds if extract_core_drug(m)]
 
+    # Compute Clinical TF-IDF weights across cohort
+    cond_weights, drug_weights = compute_cohort_idf(candidates + [target])
+
     # Collect unique vocabulary across entire population
     all_conditions = set(target_diags)
     all_drugs = set(target_core_meds)
@@ -142,11 +230,15 @@ def compute_multimodal_patient_similarity(
         other_raw_meds = [m for m in (other.get("medications") or []) if m]
         other_core_meds = [extract_core_drug(m) for m in other_raw_meds if extract_core_drug(m)]
 
-        # 1. Condition Vector Cosine Similarity
-        cond_sim = cosine_similarity(target_diags, other_diags)
+        # 1. Clinical TF-IDF Weighted Condition Vector Cosine Similarity
+        cond_sim, cond_dot, cond_norm_tgt, cond_norm_cand = weighted_cosine_similarity(
+            target_diags, other_diags, cond_weights
+        )
 
-        # 2. Drug Regimen Vector Cosine Similarity
-        drug_sim = cosine_similarity(target_core_meds, other_core_meds)
+        # 2. Clinical TF-IDF Weighted Drug Regimen Vector Cosine Similarity
+        drug_sim, drug_dot, drug_norm_tgt, drug_norm_cand = weighted_cosine_similarity(
+            target_core_meds, other_core_meds, drug_weights
+        )
 
         # 3. Composite Clinical Phenotype Score
         composite = (weight_condition * cond_sim) + (weight_drug * drug_sim)
@@ -199,6 +291,12 @@ def compute_multimodal_patient_similarity(
         enriched["target_drug_count"] = len(target_meds_set)
         enriched["candidate_drug_count"] = len(other_meds_set)
         enriched["shared_drug_count"] = len(shared_meds_set)
+        enriched["cond_dot"] = cond_dot
+        enriched["cond_norm_tgt"] = cond_norm_tgt
+        enriched["cond_norm_cand"] = cond_norm_cand
+        enriched["drug_dot"] = drug_dot
+        enriched["drug_norm_tgt"] = drug_norm_tgt
+        enriched["drug_norm_cand"] = drug_norm_cand
         enriched["rationale"] = rationale
         similar.append(enriched)
 
@@ -209,14 +307,16 @@ def compute_multimodal_patient_similarity(
     )
 
     calculation_meta = {
-        "methodology": "Multimodal Clinical Phenotype Vector Space (Dual Cosine Distance)",
-        "formula": f"Match Score = ({int(weight_condition*100)}% × Condition_Cosine) + ({int(weight_drug*100)}% × Drug_Regimen_Cosine)",
+        "methodology": "Clinical TF-IDF Weighted Phenotype Vector Space (Inverse Patient Frequency)",
+        "formula": f"Match Score = ({int(weight_condition*100)}% × Condition_Cosine_IDF) + ({int(weight_drug*100)}% × Drug_Cosine_IDF)",
         "weight_condition": weight_condition,
         "weight_drug": weight_drug,
         "condition_vocab_size": len(all_conditions),
         "drug_vocab_size": len(all_drugs),
         "target_conditions_count": len(target_diags),
         "target_drugs_count": len(target_core_meds),
+        "condition_weights": cond_weights,
+        "drug_weights": drug_weights,
     }
 
     return similar, calculation_meta
