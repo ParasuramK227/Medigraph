@@ -128,6 +128,8 @@
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .tii__low {
@@ -197,6 +199,8 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: var(--space-2) var(--space-3);
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
@@ -211,10 +215,16 @@
   color: var(--color-accent);
 }
 
+.tii__similar-link > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .tii__similar-meta {
   font-size: var(--font-xs);
   color: var(--color-text-muted);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .tii__treatments {
@@ -284,6 +294,8 @@
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .tii__treatment-disease {
@@ -294,6 +306,8 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   padding: 1px var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .tii__treatment-rate-na {

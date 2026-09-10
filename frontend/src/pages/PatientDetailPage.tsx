@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   User, Loader2, FileText, Stethoscope, Microscope, ClipboardList,
-  Users, ArrowRight, ShieldAlert, Calendar,
+  Users, ArrowRight, ShieldAlert, Calendar, Search,
 } from 'lucide-react'
 import { fetchPatient, fetchPatientIntel, type Patient, type PatientIntel } from '../lib/api'
 import { fetchPatientGraphRaw, rawGraphToF } from '../lib/graphData'
@@ -11,6 +11,16 @@ import { ScribeWidget } from '../components/scribe/ScribeWidget'
 import { useAuth } from '../hooks/useAuth'
 import { formatClinicalDate, cleanLabName, cleanPersonName } from '../lib/formatters'
 import './PatientDetailPage.css'
+
+const HISTORY_VISIBLE_LIMIT = 4
+const SIMILAR_VISIBLE_LIMIT = 5
+
+/** True when `query` matches at least one of the given fields. */
+function fieldMatches(query: string, ...fields: Array<string | undefined>): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  return fields.some((f) => (f ?? '').toLowerCase().includes(q))
+}
 
 export function PatientDetailPage() {
   const { id } = useParams()
@@ -21,6 +31,10 @@ export function PatientDetailPage() {
   const [graph, setGraph] = useState<{ nodes: FNode[]; edges: FEdge[] } | null>(null)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
+  const [historyQuery, setHistoryQuery] = useState('')
+  const [historyExpanded, setHistoryExpanded] = useState(false)
+  const [similarQuery, setSimilarQuery] = useState('')
+  const [similarExpanded, setSimilarExpanded] = useState(false)
 
   const loadData = useCallback(() => {
     if (!id) return
@@ -84,6 +98,50 @@ export function PatientDetailPage() {
   const patientNodeId = graph?.nodes.find((n) => n.labels.includes('Patient'))?.id
   const history = intel?.medical_history
 
+  // --- Medical history: filtered + capped views -------------------------------
+  const historySearching = historyQuery.trim().length > 0
+  const fDiagnoses = (history?.diagnoses ?? []).filter((d) => fieldMatches(historyQuery, d))
+  const fTreatments = (history?.treatments ?? []).filter((t) =>
+    fieldMatches(historyQuery, t.type, t.description, t.outcome),
+  )
+  const fLabs = (history?.labs ?? []).filter((l) =>
+    fieldMatches(historyQuery, l.name, l.result, l.status, l.unit),
+  )
+  const fNotes = (history?.notes ?? []).filter((n) =>
+    fieldMatches(historyQuery, n.title, n.summary),
+  )
+  const fAllergies = (history?.allergies ?? []).filter((a) =>
+    fieldMatches(historyQuery, a.substance, a.type, a.severity),
+  )
+  const historyTotal = fDiagnoses.length + fTreatments.length + fLabs.length + fNotes.length + fAllergies.length
+  const historyHasMore =
+    fDiagnoses.length > HISTORY_VISIBLE_LIMIT ||
+    fTreatments.length > HISTORY_VISIBLE_LIMIT ||
+    fLabs.length > HISTORY_VISIBLE_LIMIT ||
+    fNotes.length > HISTORY_VISIBLE_LIMIT ||
+    fAllergies.length > HISTORY_VISIBLE_LIMIT
+  const historyShowAll = historyExpanded || historySearching
+  const vDiagnoses = historyShowAll ? fDiagnoses : fDiagnoses.slice(0, HISTORY_VISIBLE_LIMIT)
+  const vTreatments = historyShowAll ? fTreatments : fTreatments.slice(0, HISTORY_VISIBLE_LIMIT)
+  const vLabs = historyShowAll ? fLabs : fLabs.slice(0, HISTORY_VISIBLE_LIMIT)
+  const vNotes = historyShowAll ? fNotes : fNotes.slice(0, HISTORY_VISIBLE_LIMIT)
+  const vAllergies = historyShowAll ? fAllergies : fAllergies.slice(0, HISTORY_VISIBLE_LIMIT)
+
+  // --- Similar patients: filtered + capped views ------------------------------
+  const similarSearching = similarQuery.trim().length > 0
+  const similarAll = intel?.similar_patients ?? []
+  const fSimilar = similarAll.filter((s) => {
+    if (!similarSearching) return true
+    const q = similarQuery.trim().toLowerCase()
+    const nameHit = (s.name ?? '').toLowerCase().includes(q)
+    const diagHit = (s.shared_diagnoses ?? s.diagnoses ?? []).some((d) =>
+      d.toLowerCase().includes(q),
+    )
+    return nameHit || diagHit
+  })
+  const similarShowAll = similarExpanded || similarSearching
+  const vSimilar = similarShowAll ? fSimilar : fSimilar.slice(0, SIMILAR_VISIBLE_LIMIT)
+
   return (
     <div className="patient-detail page">
       <header className="patient-detail__head">
@@ -132,121 +190,150 @@ export function PatientDetailPage() {
             {!intel || (history && !history.diagnoses.length && !history.treatments.length && !history.labs.length && !history.notes.length) ? (
               <p className="patient-detail__muted">No medical history on record.</p>
             ) : (
-              <div className="patient-detail__history">
-                {history?.diagnoses.length ? (
-                  <div className="patient-detail__history-block">
-                    <div className="patient-detail__history-label">Diagnoses ({history.diagnoses.length})</div>
-                    <div className="patient-detail__chips">
-                      {history.diagnoses.map((d, i) => (
-                        <span className="patient-detail__chip patient-detail__chip--disease" key={`${d}-${i}`}>
-                          {d}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
+              <>
+                <div className="patient-detail__search">
+                  <Search size={14} className="patient-detail__search-icon" />
+                  <input
+                    type="text"
+                    className="patient-detail__search-input"
+                    placeholder="Search medical history…"
+                    value={historyQuery}
+                    onChange={(e) => setHistoryQuery(e.target.value)}
+                    aria-label="Search medical history"
+                  />
+                </div>
 
-                {history?.treatments.length ? (
-                  <div className="patient-detail__history-block">
-                    <div className="patient-detail__history-label">
-                      <Stethoscope size={13} /> Treatments & Procedures ({history.treatments.length})
-                    </div>
-                    <ul className="patient-detail__list">
-                      {history.treatments.map((t, i) => (
-                        <li key={`${t.id || 't'}-${i}`} className="patient-detail__item-row">
-                          <div className="patient-detail__item-main">
-                            <span className="patient-detail__item-title">{t.type ?? 'Treatment'}</span>
-                            {t.outcome && (
-                              <span className={`patient-detail__outcome-pill patient-detail__outcome-pill--${t.outcome.toLowerCase()}`}>
-                                {t.outcome}
-                              </span>
-                            )}
-                          </div>
-                          <div className="patient-detail__item-meta">
-                            {t.date && (
-                              <span className="patient-detail__date-badge">
-                                <Calendar size={12} /> {formatClinicalDate(t.date)}
-                              </span>
-                            )}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-
-                {history?.labs.length ? (
-                  <div className="patient-detail__history-block">
-                    <div className="patient-detail__history-label">
-                      <Microscope size={13} /> Lab Tests & Vitals ({history.labs.length})
-                    </div>
-                    <ul className="patient-detail__list">
-                      {history.labs.map((l, i) => (
-                        <li key={`${l.id || 'l'}-${i}`} className="patient-detail__item-row">
-                          <div className="patient-detail__item-main">
-                            <span className="patient-detail__item-title">{cleanLabName(l.name)}</span>
-                            <div className="patient-detail__lab-value">
-                              <strong>{l.result}</strong>
-                              <span className="patient-detail__unit">
-                                {l.unit ? l.unit.replace('{score}', '/ 10') : ''}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="patient-detail__item-meta">
-                            <span className={`patient-detail__lab-status patient-detail__lab-status--${(l.status || 'normal').toLowerCase()}`}>
-                              {l.status || 'normal'}
+                {historySearching && historyTotal === 0 ? (
+                  <p className="patient-detail__muted">No matches for “{historyQuery}” in medical history.</p>
+                ) : (
+                  <div className="patient-detail__history">
+                    {vDiagnoses.length ? (
+                      <div className="patient-detail__history-block">
+                        <div className="patient-detail__history-label">Diagnoses ({vDiagnoses.length})</div>
+                        <div className="patient-detail__chips">
+                          {vDiagnoses.map((d, i) => (
+                            <span className="patient-detail__chip patient-detail__chip--disease" key={`${d}-${i}`}>
+                              {d}
                             </span>
-                            {l.date && (
-                              <span className="patient-detail__date-badge">
-                                <Calendar size={12} /> {formatClinicalDate(l.date)}
-                              </span>
-                            )}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
 
-                {history?.notes.length ? (
-                  <div className="patient-detail__history-block">
-                    <div className="patient-detail__history-label">
-                      <ClipboardList size={13} /> Consultation notes
-                    </div>
-                    <ul className="patient-detail__list patient-detail__list--notes">
-                      {history.notes.map((n, i) => (
-                        <li key={`${n.id || 'n'}-${i}`} className="patient-detail__note-card">
-                          <div className="patient-detail__note-head">
-                            <span className="patient-detail__date-badge">
-                              <Calendar size={12} /> {formatClinicalDate(n.created_at)}
+                    {vTreatments.length ? (
+                      <div className="patient-detail__history-block">
+                        <div className="patient-detail__history-label">
+                          <Stethoscope size={13} /> Treatments & Procedures ({vTreatments.length})
+                        </div>
+                        <ul className="patient-detail__list">
+                          {vTreatments.map((t, i) => (
+                            <li key={`${t.id || 't'}-${i}`} className="patient-detail__item-row">
+                              <div className="patient-detail__item-main">
+                                <span className="patient-detail__item-title">{t.type ?? 'Treatment'}</span>
+                                {t.outcome && (
+                                  <span className={`patient-detail__outcome-pill patient-detail__outcome-pill--${t.outcome.toLowerCase()}`}>
+                                    {t.outcome}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="patient-detail__item-meta">
+                                {t.date && (
+                                  <span className="patient-detail__date-badge">
+                                    <Calendar size={12} /> {formatClinicalDate(t.date)}
+                                  </span>
+                                )}
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+
+                    {vLabs.length ? (
+                      <div className="patient-detail__history-block">
+                        <div className="patient-detail__history-label">
+                          <Microscope size={13} /> Lab Tests & Vitals ({vLabs.length})
+                        </div>
+                        <ul className="patient-detail__list">
+                          {vLabs.map((l, i) => (
+                            <li key={`${l.id || 'l'}-${i}`} className="patient-detail__item-row">
+                              <div className="patient-detail__item-main">
+                                <span className="patient-detail__item-title">{cleanLabName(l.name)}</span>
+                                <div className="patient-detail__lab-value">
+                                  <strong>{l.result}</strong>
+                                  <span className="patient-detail__unit">
+                                    {l.unit ? l.unit.replace('{score}', '/ 10') : ''}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="patient-detail__item-meta">
+                                <span className={`patient-detail__lab-status patient-detail__lab-status--${(l.status || 'normal').toLowerCase()}`}>
+                                  {l.status || 'normal'}
+                                </span>
+                                {l.date && (
+                                  <span className="patient-detail__date-badge">
+                                    <Calendar size={12} /> {formatClinicalDate(l.date)}
+                                  </span>
+                                )}
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+
+                    {vNotes.length ? (
+                      <div className="patient-detail__history-block">
+                        <div className="patient-detail__history-label">
+                          <ClipboardList size={13} /> Consultation notes
+                        </div>
+                        <ul className="patient-detail__list patient-detail__list--notes">
+                          {vNotes.map((n, i) => (
+                            <li key={`${n.id || 'n'}-${i}`} className="patient-detail__note-card">
+                              <div className="patient-detail__note-head">
+                                <span className="patient-detail__date-badge">
+                                  <Calendar size={12} /> {formatClinicalDate(n.created_at)}
+                                </span>
+                                {n.title && <span className="patient-detail__note-title">{n.title}</span>}
+                              </div>
+                              <div className="patient-detail__note-body">{n.summary}</div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+
+                    {vAllergies.length ? (
+                      <div className="patient-detail__history-block">
+                        <div className="patient-detail__history-label">
+                          <ShieldAlert size={13} /> Recorded Allergies
+                        </div>
+                        <div className="patient-detail__chips">
+                          {vAllergies.map((a, i) => (
+                            <span
+                              className="patient-detail__chip patient-detail__chip--allergy"
+                              key={`${a.id ?? a.substance ?? 'a'}-${i}`}
+                            >
+                              {a.substance} {a.severity ? `(${a.severity})` : ''}
                             </span>
-                            {n.title && <span className="patient-detail__note-title">{n.title}</span>}
-                          </div>
-                          <div className="patient-detail__note-body">{n.summary}</div>
-                        </li>
-                      ))}
-                    </ul>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
+                )}
 
-                {history?.allergies && history.allergies.length ? (
-                  <div className="patient-detail__history-block">
-                    <div className="patient-detail__history-label">
-                      <ShieldAlert size={13} /> Recorded Allergies
-                    </div>
-                    <div className="patient-detail__chips">
-                      {history.allergies.map((a, i) => (
-                        <span
-                          className="patient-detail__chip patient-detail__chip--allergy"
-                          key={`${a.id ?? a.substance ?? 'a'}-${i}`}
-                        >
-                          {a.substance} {a.severity ? `(${a.severity})` : ''}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
+                {historyHasMore && !historySearching && (
+                  <button
+                    type="button"
+                    className="patient-detail__expand"
+                    onClick={() => setHistoryExpanded((v) => !v)}
+                    aria-expanded={historyExpanded}
+                  >
+                    {historyExpanded ? 'Show less' : `Show all (${historyTotal} items)`}
+                  </button>
+                )}
+              </>
             )}
           </section>
         </div>
@@ -259,21 +346,50 @@ export function PatientDetailPage() {
             {!intel || !intel.similar_patients.length ? (
               <p className="patient-detail__muted">No similar patients found.</p>
             ) : (
-              <ul className="patient-detail__similar">
-                {intel.similar_patients.map((s, i) => (
-                  <li key={`${s.id ?? s.patient_id ?? 'sp'}-${i}`}>
-                    <Link
-                      to={`/patients/${s.id ?? s.patient_id}`}
-                      className="patient-detail__similar-link"
-                    >
-                      <span>{s.name}</span>
-                      <span className="patient-detail__similar-meta">
-                        {Math.round(s.similarity * 100)}% similar
-                      </span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <div className="patient-detail__search">
+                  <Search size={14} className="patient-detail__search-icon" />
+                  <input
+                    type="text"
+                    className="patient-detail__search-input"
+                    placeholder="Search similar patients…"
+                    value={similarQuery}
+                    onChange={(e) => setSimilarQuery(e.target.value)}
+                    aria-label="Search similar patients"
+                  />
+                </div>
+
+                {similarSearching && fSimilar.length === 0 ? (
+                  <p className="patient-detail__muted">No matching patients.</p>
+                ) : (
+                  <ul className="patient-detail__similar">
+                    {vSimilar.map((s, i) => (
+                      <li key={`${s.id ?? s.patient_id ?? 'sp'}-${i}`}>
+                        <Link
+                          to={`/patients/${s.id ?? s.patient_id}`}
+                          className="patient-detail__similar-link"
+                        >
+                          <span>{s.name}</span>
+                          <span className="patient-detail__similar-meta">
+                            {Math.round(s.similarity * 100)}% similar
+                          </span>
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {fSimilar.length > SIMILAR_VISIBLE_LIMIT && !similarSearching && (
+                  <button
+                    type="button"
+                    className="patient-detail__expand"
+                    onClick={() => setSimilarExpanded((v) => !v)}
+                    aria-expanded={similarExpanded}
+                  >
+                    {similarExpanded ? 'Show less' : `Show all (${fSimilar.length} patients)`}
+                  </button>
+                )}
+              </>
             )}
           </section>
 

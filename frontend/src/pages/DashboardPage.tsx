@@ -1,7 +1,16 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
-import { Users, Activity, Pill, FlaskConical, FileText, FolderKanban, TrendingUp, Loader2 } from 'lucide-react'
-import { fetchSchema, fetchRecentNotes, fetchTopSectors, fetchTreatmentTrend } from '../lib/api'
+import { Users, Activity, Pill, FlaskConical, FileText, FolderKanban, Loader2 } from 'lucide-react'
+import {
+  PolarAngleAxis,
+  PolarGrid,
+  PolarRadiusAxis,
+  Radar,
+  RadarChart,
+  ResponsiveContainer,
+  Tooltip,
+} from 'recharts'
+import { fetchSchema, fetchRecentNotes, fetchSectors, fetchTopSectors } from '../lib/api'
 import { tokenColor } from '../lib/graphColors'
 import './DashboardPage.css'
 
@@ -17,9 +26,9 @@ interface SectorRow {
   patients: number
 }
 
-interface TrendPoint {
-  month: string
-  count: number
+interface RadarDatum {
+  label: string
+  patients: number
 }
 
 const statCards = [
@@ -34,7 +43,8 @@ export function DashboardPage() {
   const [schema, setSchema] = useState<{ labels: Array<{ label: string; count: number }>; node_count: number } | null>(null)
   const [recent, setRecent] = useState<RecentNote[]>([])
   const [sectors, setSectors] = useState<SectorRow[]>([])
-  const [trend, setTrend] = useState<TrendPoint[]>([])
+  const [radarRows, setRadarRows] = useState<RadarDatum[]>([])
+  const [sectorCount, setSectorCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -42,19 +52,19 @@ export function DashboardPage() {
     let cancelled = false
     setLoading(true)
     setError(null)
-    Promise.all([fetchSchema(), fetchRecentNotes(), fetchTopSectors(), fetchTreatmentTrend()])
-      .then(([sch, notesRes, sectRes, trendRes]) => {
+    Promise.all([fetchSchema(), fetchRecentNotes(), fetchSectors(), fetchTopSectors()])
+      .then(([sch, notesRes, sectorRows, topSectRes]) => {
         if (cancelled) return
         setSchema(sch)
         setRecent(notesRes)
-        setSectors(sectRes)
-        const byMonth = new Map<string, number>()
-        for (const d of trendRes.dates ?? []) {
-          if (!d) continue
-          const key = d.slice(0, 7)
-          byMonth.set(key, (byMonth.get(key) ?? 0) + 1)
-        }
-        setTrend([...byMonth.entries()].sort().map(([month, count]) => ({ month, count })))
+        setRadarRows(
+          sectorRows.slice(0, 6).map((s) => ({
+            label: s.name,
+            patients: s.patients,
+          })),
+        )
+        setSectorCount(sectorRows.length)
+        setSectors(topSectRes)
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load dashboard')
@@ -103,15 +113,16 @@ export function DashboardPage() {
             })}
           </div>
 
-          <section className="dash-panel dash-panel--trend">
+          <section className="dash-panel dash-panel--radar">
             <div className="dash-panel__head">
-              <TrendingUp size={16} className="dash-panel__icon" />
-              <h2 className="dash-panel__title">Treatment activity</h2>
+              <Activity size={16} className="dash-panel__icon" />
+              <h2 className="dash-panel__title">Top Disease Sectors</h2>
             </div>
-            {trend.length === 0 ? (
-              <p className="dash-empty">No treatment activity yet.</p>
+            <p className="dash-radar__sub">Top 6 diseases by patient count</p>
+            {radarRows.length === 0 ? (
+              <p className="dash-empty">No disease data available.</p>
             ) : (
-              <TrendChart data={trend} />
+              <DiseaseRadarChart data={radarRows} totalSectors={sectorCount} />
             )}
           </section>
 
@@ -165,106 +176,115 @@ export function DashboardPage() {
   )
 }
 
-/** Hand-rolled SVG XY line chart (no external chart lib; token colors only). */
-function TrendChart({ data }: { data: TrendPoint[] }) {
-  // Focus on the most recent 18 months of treatment data to maintain legibility
-  const chartData = data.length > 18 ? data.slice(-18) : data
+/** Round the radial-axis step up to a "nice" value so ticks stay sensible. */
+function niceStep(max: number): number {
+  if (max <= 0) return 1
+  const pow = Math.pow(10, Math.floor(Math.log10(max)))
+  const norm = max / pow
+  let m = 10
+  if (norm <= 1) m = 1
+  else if (norm <= 2) m = 2
+  else if (norm <= 2.5) m = 2.5
+  else if (norm <= 5) m = 5
+  return m * pow
+}
 
-  const W = 620
-  const H = 260
-  const padL = 36
-  const padB = 30
-  const padT = 16
-  const padR = 16
-  const lineColor = tokenColor('--color-brand')
-  const gridColor = tokenColor('--color-border')
-  const textColor = tokenColor('--color-text-muted')
-  const valueColor = tokenColor('--color-text')
-
-  if (chartData.length === 0) {
-    return <p className="dash-empty">No treatment activity data recorded.</p>
+/** Break a label into short lines so angled labels don't clip. */
+function wrapLabel(label: string, max = 11): string[] {
+  const words = label.split(/\s+/)
+  const lines: string[] = []
+  let cur = ''
+  for (const w of words) {
+    const candidate = cur ? `${cur} ${w}` : w
+    if (candidate.length <= max) {
+      cur = candidate
+    } else {
+      if (cur) lines.push(cur)
+      cur = w
+    }
   }
+  if (cur) lines.push(cur)
+  return lines
+}
 
-  const max = Math.max(...chartData.map((d) => d.count), 1)
-  const plotW = W - padL - padR
-  const plotH = H - padT - padB
-  const stepX = chartData.length > 1 ? plotW / (chartData.length - 1) : 0
-  const x = (i: number) => padL + i * stepX
-  const y = (v: number) => padT + plotH - (v / max) * plotH
+interface AngleTickProps {
+  x?: number
+  y?: number
+  textAnchor?: 'end' | 'middle' | 'start' | 'inherit'
+  payload?: { value?: unknown }
+}
 
-  const pts = chartData.map((d, i) => `${x(i).toFixed(1)},${y(d.count).toFixed(1)}`)
-  const line = pts.join(' ')
-  // 4 horizontal gridlines.
-  const gridCount = 4
-  const gridLines = Array.from({ length: gridCount + 1 }, (_, i) => {
-    const val = (max / gridCount) * i
-    const yy = y(val)
-    return { yy, val: Math.round(val) }
-  })
+function AngleTick(props: AngleTickProps) {
+  const { x = 0, y = 0, textAnchor = 'middle', payload } = props
+  const label = String(payload?.value ?? '')
+  const lines = wrapLabel(label)
+  const showFull = lines.length > 1
+  return (
+    <g>
+      {showFull && <title>{label}</title>}
+      <text x={x} y={y} textAnchor={textAnchor} className="dash-radar__label">
+        {lines.map((line, i) => (
+          <tspan key={line} x={x} dy={i === 0 ? 0 : 12}>
+            {line}
+          </tspan>
+        ))}
+      </text>
+    </g>
+  )
+}
 
-  const areaPath = `M ${x(0)} ${padT + plotH} L ${pts.join(' L ')} L ${x(chartData.length - 1)} ${padT + plotH} Z`
+interface DiseaseTooltipProps {
+  active?: boolean
+  payload?: Array<{ value: number; payload: RadarDatum }>
+}
 
-  const monthLabel = (k: string) => {
-    const [y2, m] = k.split('-')
-    const names = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    return `${names[Number(m)] || m} '${y2.slice(2)}`
-  }
+function DiseaseTooltip({ active, payload }: DiseaseTooltipProps) {
+  if (!active || !payload || payload.length === 0) return null
+  const row = payload[0]
+  return (
+    <div className="dash-radar__tooltip">
+      <span className="dash-radar__tooltip-label">Disease</span>
+      <span className="dash-radar__tooltip-value">{row.payload.label}</span>
+      <span className="dash-radar__tooltip-label">Patients</span>
+      <span className="dash-radar__tooltip-value">{row.value.toLocaleString()}</span>
+    </div>
+  )
+}
 
-  // Show at most 6 nicely spaced labels on the X-axis
-  const labelInterval = Math.max(1, Math.ceil(chartData.length / 6))
+/** Recharts radar chart: one vertex per top disease, radial value = patient count. */
+function DiseaseRadarChart({ data, totalSectors }: { data: RadarDatum[]; totalSectors: number }) {
+  const brand = tokenColor('--color-brand')
+  const grid = tokenColor('--color-border')
+  const muted = tokenColor('--color-text-muted')
+  const maxPatients = Math.max(...data.map((d) => d.patients), 1)
+  const axisMax = niceStep(maxPatients / 4) * 4
 
   return (
-    <div className="dash-trend">
-      <svg viewBox={`0 0 ${W} ${H}`} className="dash-trend__svg" role="img" aria-label="Treatment activity trend">
-        <defs>
-          <linearGradient id="dashTrendFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={lineColor} stopOpacity="0.25" />
-            <stop offset="100%" stopColor={lineColor} stopOpacity="0.02" />
-          </linearGradient>
-        </defs>
-
-        {gridLines.map((g, i) => (
-          <g key={i}>
-            <line x1={padL} x2={W - padR} y1={g.yy} y2={g.yy} stroke={gridColor} strokeWidth={1} />
-            <text x={padL - 6} y={g.yy + 3} textAnchor="end" className="dash-trend__axis" fill={textColor}>
-              {g.val}
-            </text>
-          </g>
-        ))}
-
-        <path d={areaPath} fill="url(#dashTrendFill)" />
-        <polyline points={line} fill="none" stroke={lineColor} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
-
-        {chartData.map((d, i) => {
-          const isKeyPoint = i % labelInterval === 0 || i === chartData.length - 1
-          return (
-            <g key={d.month}>
-              <circle
-                cx={x(i)}
-                cy={y(d.count)}
-                r={isKeyPoint ? 4 : 2.5}
-                fill="#ffffff"
-                stroke={lineColor}
-                strokeWidth={isKeyPoint ? 2 : 1.5}
-              >
-                <title>{`${d.month}: ${d.count} treatments`}</title>
-              </circle>
-              {isKeyPoint && (
-                <>
-                  <text x={x(i)} y={y(d.count) - 9} textAnchor="middle" className="dash-trend__value" fill={valueColor}>
-                    {d.count}
-                  </text>
-                  <text x={x(i)} y={H - 8} textAnchor="middle" className="dash-trend__axis" fill={textColor}>
-                    {monthLabel(d.month)}
-                  </text>
-                </>
-              )}
-            </g>
-          )
-        })}
-      </svg>
-      <p className="dash-trend__cap">
-        Showing recent {chartData.length} months of treatment volume ({chartData[0]?.month} to {chartData[chartData.length - 1]?.month}).
+    <div className="dash-radar" role="img" aria-label="Radar chart of the top six disease sectors by patient count">
+      <ResponsiveContainer width="100%" height={400}>
+        <RadarChart data={data} cx="50%" cy="50%" outerRadius="72%">
+          <PolarGrid gridType="polygon" stroke={grid} />
+          <PolarAngleAxis dataKey="label" tick={<AngleTick />} axisLine={{ stroke: grid }} />
+          <PolarRadiusAxis
+            domain={[0, axisMax]}
+            tickCount={5}
+            angle={90}
+            stroke="none"
+            tick={{ fill: muted, fontSize: 11 }}
+          />
+          <Radar
+            dataKey="patients"
+            stroke={brand}
+            fill={brand}
+            fillOpacity={0.15}
+            strokeWidth={2}
+            dot={{ r: 3, fill: brand, stroke: brand }}
+          />
+          <Tooltip cursor={false} content={<DiseaseTooltip />} />
+        </RadarChart>
+      </ResponsiveContainer>
+      <p className="dash-radar__cap">
+        Radial axis = patient count · top {data.length} of {totalSectors} disease sectors.
       </p>
     </div>
   )

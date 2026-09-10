@@ -610,12 +610,4 @@ export async function fetchTopSectors(): Promise<TopSectorRow[]> {
   const data = await apiFetch<TopSectorRow[]>('/api/graph/dashboard/top-sectors')
   return Array.isArray(data) ? data : []
 }
-
-export interface TreatmentTrend {
-  dates: string[]
-}
-
-export async function fetchTreatmentTrend(): Promise<TreatmentTrend> {
-  return apiFetch<TreatmentTrend>('/api/graph/dashboard/treatment-trend')
-}
 

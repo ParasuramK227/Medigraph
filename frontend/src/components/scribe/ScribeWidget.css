@@ -7,6 +7,8 @@
   border-radius: var(--radius-lg);
   background: var(--color-surface-raised);
   min-width: 0;
+  width: 100%;
+  max-width: 100%;
 }
 
 .scribe-header-row {
@@ -29,9 +31,24 @@
   color: var(--color-text);
 }
 
+.scribe-offline-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--color-warning) 12%, var(--color-surface));
+  border: 1px solid color-mix(in srgb, var(--color-warning) 40%, transparent);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-warning);
+}
+
 /* Mode selector buttons */
 .scribe-mode-selector {
   display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   gap: var(--space-1);
   background: var(--color-bg);
   padding: 3px;
@@ -135,6 +152,7 @@
 .scribe-recording-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
@@ -282,6 +300,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .scribe-sec-label {
@@ -349,6 +369,7 @@
 .scribe-translation-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
   font-size: 13px;
   color: var(--color-text-muted);
@@ -457,6 +478,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
   background: color-mix(in srgb, var(--color-success) 10%, var(--color-surface));
   border: 1px solid color-mix(in srgb, var(--color-success) 30%, transparent);
@@ -508,6 +531,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .scribe-field-group {
@@ -620,6 +645,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .scribe-med-title-row {

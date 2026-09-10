@@ -17,6 +17,7 @@ import {
   Plus,
   Trash2,
   Zap,
+  WifiOff,
 } from 'lucide-react'
 import {
   scribeStart,
@@ -35,6 +36,7 @@ import {
   transcribeFileWithMoonshine,
 } from '../../lib/browserMoonshine'
 import type { MicTranscriber } from '@moonshine-ai/moonshine-wasm'
+import { useOnline } from '../../hooks/useOnline'
 import './ScribeWidget.css'
 
 type ScribeStage =
@@ -114,6 +116,21 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
   useEffect(() => {
     sessionIdRef.current = sessionId
   }, [sessionId])
+
+  const isOnline = useOnline()
+
+  // Start a backend scribe session; if the backend is unreachable (offline),
+  // fall back to a local session id so on-device Moonshine keeps working.
+  const startOrLocalSession = useCallback(async (): Promise<string> => {
+    try {
+      const init = await scribeStart()
+      return init.session_id
+    } catch {
+      return typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    }
+  }, [])
 
   // Reset recording timers and hardware instances
   const cleanupMedia = useCallback(() => {
@@ -236,9 +253,9 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
   // Start on-device Moonshine streaming transcription (100% in-browser WASM).
   const handleStartMoonshineRecording = async () => {
     try {
-      const init = await scribeStart()
-      setSessionId(init.session_id)
-      sessionIdRef.current = init.session_id
+      const session = await startOrLocalSession()
+      setSessionId(session)
+      sessionIdRef.current = session
 
       moonshineLinesRef.current = []
       moonshineInterimRef.current = ''
@@ -340,7 +357,7 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
         return
       }
 
-      const activeSid = sessionId || (await scribeStart()).session_id
+      const activeSid = sessionId || (await startOrLocalSession())
       if (!sessionId) setSessionId(activeSid)
 
       setClientWhisperStatus('Finalizing complete consultation transcript in browser...')
@@ -425,8 +442,8 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
     setStage('transcribing')
 
     try {
-      const init = await scribeStart()
-      setSessionId(init.session_id)
+      const init = await startOrLocalSession()
+      setSessionId(init)
 
       if (sttMode === 'moonshine') {
         setClientWhisperStatus('Transcribing uploaded file in browser via Moonshine...')
@@ -604,6 +621,13 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
           <span>AI Clinical Scribe Studio</span>
         </div>
 
+        {!isOnline && (
+          <div className="scribe-offline-pill" title="No internet connection detected. On-device transcription keeps working; translation, extraction, and saving need internet.">
+            <WifiOff size={13} />
+            Offline — On-device transcription active
+          </div>
+        )}
+
         {stage === 'idle' && (
           <div className="scribe-mode-selector">
             <button
@@ -631,7 +655,7 @@ export function ScribeWidget({ patientId, patientName, doctorName, onNoteSaved }
                 setSttMode('manual')
                 setStage('review')
                 if (!sessionId) {
-                  scribeStart().then((res) => setSessionId(res.session_id))
+                  startOrLocalSession().then((res) => setSessionId(res))
                 }
               }}
               title="Quickly type or paste doctor consultation notes."

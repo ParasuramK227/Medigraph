@@ -1,10 +1,14 @@
-import { MicTranscriber, ModelArch, Transcriber } from '@moonshine-ai/moonshine-wasm'
+import { AssetDownloader, MicTranscriber, ModelArch, Transcriber } from '@moonshine-ai/moonshine-wasm'
 import { blobToAudioBuffer } from './browserWhisper'
 
 // Moonshine Medium Streaming: best-performing English streaming model (~245M params).
 // Runs entirely in-browser via WebAssembly. 0 bytes leave the user's device.
+//
+// The model weights are self-hosted (see frontend/public/models/moonshine/) so the
+// engine works fully offline with no CDN fetch and no first-use download.
 export const MOONSHINE_MODEL_ARCH: ModelArch = ModelArch.MediumStreaming
 export const MOONSHINE_LANG = 'en'
+export const MOONSHINE_MODEL_BASE = '/models/moonshine/'
 
 export interface MoonshineMicOptions {
   onText: (text: string) => void
@@ -14,11 +18,12 @@ export interface MoonshineMicOptions {
 }
 
 /**
- * Builds a live Moonshine transcriber, downloads the model (cached on first use),
+ * Builds a live Moonshine transcriber from the self-hosted model files
  * and starts listening on the microphone. Everything happens on-device.
  */
 export async function startMoonshineMic(opts: MoonshineMicOptions): Promise<MicTranscriber> {
   const mic = new MicTranscriber()
+    .modelsFrom(MOONSHINE_MODEL_BASE)
     .language(MOONSHINE_LANG)
     .modelArch(MOONSHINE_MODEL_ARCH)
     .onText((text) => opts.onText(text))
@@ -27,7 +32,7 @@ export async function startMoonshineMic(opts: MoonshineMicOptions): Promise<MicT
     .onProgress((fraction, _file) => {
       if (opts.onProgress) {
         const pct = Math.min(100, Math.max(0, Math.round(fraction * 100)))
-        opts.onProgress(fraction, `Downloading Moonshine model (Medium Streaming): ${pct}%`)
+        opts.onProgress(fraction, `Loading Moonshine model (Medium Streaming): ${pct}%`)
       }
     })
 
@@ -70,11 +75,12 @@ export async function transcribeFileWithMoonshine(
   const transcriber = await Transcriber.load({
     language: MOONSHINE_LANG,
     modelArch: MOONSHINE_MODEL_ARCH,
+    downloader: new AssetDownloader({ baseUrl: MOONSHINE_MODEL_BASE }),
     onProgress: (loaded, total) => {
       if (onProgress && typeof total === 'number' && total > 0) {
-        onProgress(`Downloading Moonshine model: ${Math.round((loaded / total) * 100)}%`)
+        onProgress(`Loading Moonshine model: ${Math.round((loaded / total) * 100)}%`)
       } else if (onProgress) {
-        onProgress('Downloading Moonshine model...')
+        onProgress('Loading Moonshine model...')
       }
     },
   })

@@ -4,6 +4,7 @@ import {
   login as apiLogin,
   register as apiRegister,
   onUnauthorized,
+  type ApiError,
   type AuthUser,
 } from '../lib/api'
 import {
@@ -43,9 +44,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setStoredUser(u)
         }
       })
-      .catch(() => {
-        clearAuth()
-        if (!cancelled) setUser(null)
+      .catch((e) => {
+        // A real 401 (invalid/expired session) drops the session. A network or
+        // backend failure (no `status`) means we may be offline — keep the
+        // persisted user so on-device features still work.
+        if (!cancelled && e instanceof Error && (e as ApiError).status === 401) {
+          clearAuth()
+          setUser(null)
+        }
       })
       .finally(() => {
         if (!cancelled) setReady(true)
