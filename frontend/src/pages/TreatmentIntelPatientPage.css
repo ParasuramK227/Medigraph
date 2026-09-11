@@ -1368,3 +1368,132 @@
   font-style: italic;
   font-family: system-ui, sans-serif;
 }
+
+/* Subscore Feature Details */
+.tii__subscore-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.tii__subscore-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.68rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  line-height: 1.3;
+}
+
+.tii__subscore-chip--cond {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+.tii__subscore-chip--drug {
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+/* Term Breakdown Inside Live Math Proof */
+.tii__math-terms-box {
+  margin: 6px 0 8px 0;
+  padding: 8px 10px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tii__math-terms-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.tii__math-terms-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tii__math-term-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.tii__math-term-item--disease {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
+.tii__math-term-item--drug {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #6ee7b7;
+}
+
+.tii__math-term-name {
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.tii__math-term-weight-pill {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(15, 23, 42, 0.65);
+}
+
+.tii__math-term-sum {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.7rem;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.4);
+  padding: 4px 8px;
+  border-radius: 4px;
+  border-left: 2px solid #38bdf8;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.tii__math-terms-empty {
+  font-size: 0.7rem;
+  color: #64748b;
+  font-style: italic;
+  padding: 4px 6px;
+}
+
+/* Weight Badge on Shared Tags */
+.tii__tag-weight-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.65rem;
+  font-weight: 700;
+  border-radius: 3px;
+  background: rgba(15, 23, 42, 0.75);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+}
+

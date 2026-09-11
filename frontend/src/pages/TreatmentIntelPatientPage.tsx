@@ -32,6 +32,18 @@ function cleanDrug(med: string): string {
   return (match && match[1].trim().length > 2 ? match[1].trim() : m).toLowerCase()
 }
 
+// Helpers to lookup specificity weights
+function getConditionWeight(cond: string, weights?: Record<string, number>): number {
+  if (!cond || !weights) return 0.5
+  return weights[cond.trim().toLowerCase()] ?? 0.5
+}
+
+function getDrugWeight(med: string, weights?: Record<string, number>): number {
+  if (!med || !weights) return 0.5
+  const core = cleanDrug(med)
+  return weights[core] ?? weights[med.trim().toLowerCase()] ?? 0.5
+}
+
 // Interactive Vector Comparator Component
 function PatientVectorComparator({
   targetDiagnoses,
@@ -100,7 +112,7 @@ function PatientVectorComparator({
           <span>Feature Vector Projection: Target vs Match #{candidateRank}</span>
         </div>
         <span className="tii__vc-subtitle">
-          Binary multi-hot dimensions across condition &amp; pharmacotherapy spaces
+          Binary multi-hot dimensions across condition &amp; pharmacotherapy spaces with clinical rarity weights
         </span>
       </div>
 
@@ -116,11 +128,11 @@ function PatientVectorComparator({
         </div>
         <div className="tii__vc-table">
           <div className="tii__vc-table-header">
-            <span className="tii__vc-col-feat">Clinical Condition Feature</span>
+            <span className="tii__vc-col-feat">Clinical Condition Feature (Disease Name)</span>
             <span className="tii__vc-col-weight">Clinical IDF Weight</span>
             <span className="tii__vc-col-bit" title="Target Patient Vector Bit">Target v<sub>tgt</sub></span>
             <span className="tii__vc-col-bit" title="Candidate Vector Bit">Match v<sub>{candidateRank}</sub></span>
-            <span className="tii__vc-col-status">Alignment</span>
+            <span className="tii__vc-col-status">Feature Alignment &amp; Name</span>
           </div>
           {allConditions.map(([key, label]) => {
             const inTgt = targetCondSet.has(key)
@@ -149,11 +161,17 @@ function PatientVectorComparator({
                 </span>
                 <span className="tii__vc-status">
                   {isMatch ? (
-                    <span className="tii__vc-badge tii__vc-badge--match">1 • 1 (w² = {(weight*weight).toFixed(3)})</span>
+                    <span className="tii__vc-badge tii__vc-badge--match" title={`Matched condition: ${label} (w = ${weight.toFixed(2)})`}>
+                      1 • 1 [{label}] (w = {weight.toFixed(2)}, w² = {(weight*weight).toFixed(3)})
+                    </span>
                   ) : inTgt ? (
-                    <span className="tii__vc-badge tii__vc-badge--target">1 • 0 (Target)</span>
+                    <span className="tii__vc-badge tii__vc-badge--target" title={`Target only: ${label} (w = ${weight.toFixed(2)})`}>
+                      1 • 0 [{label}] (Target, w = {weight.toFixed(2)})
+                    </span>
                   ) : (
-                    <span className="tii__vc-badge tii__vc-badge--cand">0 • 1 (Candidate)</span>
+                    <span className="tii__vc-badge tii__vc-badge--cand" title={`Match #${candidateRank} only: ${label} (w = ${weight.toFixed(2)})`}>
+                      0 • 1 [{label}] (Match #{candidateRank}, w = {weight.toFixed(2)})
+                    </span>
                   )}
                 </span>
               </div>
@@ -177,11 +195,11 @@ function PatientVectorComparator({
         ) : (
           <div className="tii__vc-table">
             <div className="tii__vc-table-header">
-              <span className="tii__vc-col-feat">Active Pharmacotherapy Regimen</span>
+              <span className="tii__vc-col-feat">Active Pharmacotherapy Regimen (Drug Name)</span>
               <span className="tii__vc-col-weight">Clinical IDF Weight</span>
               <span className="tii__vc-col-bit" title="Target Patient Vector Bit">Target v<sub>tgt</sub></span>
               <span className="tii__vc-col-bit" title="Candidate Vector Bit">Match v<sub>{candidateRank}</sub></span>
-              <span className="tii__vc-col-status">Alignment</span>
+              <span className="tii__vc-col-status">Feature Alignment &amp; Name</span>
             </div>
             {allDrugs.map(([key, label]) => {
               const inTgt = targetDrugSet.has(key)
@@ -210,11 +228,17 @@ function PatientVectorComparator({
                   </span>
                   <span className="tii__vc-status">
                     {isMatch ? (
-                      <span className="tii__vc-badge tii__vc-badge--match">1 • 1 (w² = {(weight*weight).toFixed(3)})</span>
+                      <span className="tii__vc-badge tii__vc-badge--match" title={`Matched regimen: ${label} (w = ${weight.toFixed(2)})`}>
+                        1 • 1 [{label}] (w = {weight.toFixed(2)}, w² = {(weight*weight).toFixed(3)})
+                      </span>
                     ) : inTgt ? (
-                      <span className="tii__vc-badge tii__vc-badge--target">1 • 0 (Target)</span>
+                      <span className="tii__vc-badge tii__vc-badge--target" title={`Target only: ${label} (w = ${weight.toFixed(2)})`}>
+                        1 • 0 [{label}] (Target, w = {weight.toFixed(2)})
+                      </span>
                     ) : (
-                      <span className="tii__vc-badge tii__vc-badge--cand">0 • 1 (Candidate)</span>
+                      <span className="tii__vc-badge tii__vc-badge--cand" title={`Match #${candidateRank} only: ${label} (w = ${weight.toFixed(2)})`}>
+                        0 • 1 [{label}] (Match #{candidateRank}, w = {weight.toFixed(2)})
+                      </span>
                     )}
                   </span>
                 </div>
@@ -617,6 +641,28 @@ export function TreatmentIntelPatientPage() {
               const drugPct = s.drug_similarity != null ? Math.round(s.drug_similarity * 100) : 0
               const isVectorExpanded = showAllVectors || !!expandedVectors[s.id]
 
+              const condWeights = data.calculation_meta?.condition_weights || {}
+              const drugWeights = data.calculation_meta?.drug_weights || {}
+
+              const sharedCondsWithWeights = (s.shared_diagnoses || []).map((d) => {
+                const w = getConditionWeight(d, condWeights)
+                return {
+                  name: d,
+                  weight: w,
+                  wSq: w * w,
+                }
+              })
+
+              const sharedDrugsWithWeights = (s.shared_medications || []).map((m) => {
+                const w = getDrugWeight(m, drugWeights)
+                return {
+                  name: m,
+                  coreName: cleanDrug(m),
+                  weight: w,
+                  wSq: w * w,
+                }
+              })
+
               return (
                 <div className="tii__patient-card tii__patient-card--top3" key={s.id}>
                   <div className="tii__card-top">
@@ -633,31 +679,51 @@ export function TreatmentIntelPatientPage() {
                     </div>
                   </div>
 
-                  {/* Subscore meters for vector mode */}
+                  {/* Subscore meters for vector mode with active feature names & weights */}
                   {method === 'vector' && (
                     <div className="tii__subscores">
                       <div className="tii__subscore-item">
                         <div className="tii__subscore-info">
                           <span className="tii__subscore-name">
-                            <Stethoscope size={12} /> Condition Vector
+                            <Stethoscope size={12} /> Condition Vector Space
                           </span>
                           <span className="tii__subscore-val">{condPct}%</span>
                         </div>
                         <div className="tii__subscore-bar">
                           <div className="tii__subscore-fill tii__subscore-fill--cond" style={{ width: `${condPct}%` }} />
                         </div>
+                        {sharedCondsWithWeights.length > 0 && (
+                          <div className="tii__subscore-details">
+                            {sharedCondsWithWeights.map((cw) => (
+                              <span className="tii__subscore-chip tii__subscore-chip--cond" key={cw.name} title={`Condition: ${cw.name} (w = ${cw.weight.toFixed(2)})`}>
+                                <Stethoscope size={9} style={{ display: 'inline', marginRight: 3 }} />
+                                {cw.name}: <strong>w = {cw.weight.toFixed(2)}</strong>
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
 
                       <div className="tii__subscore-item">
                         <div className="tii__subscore-info">
                           <span className="tii__subscore-name">
-                            <Pill size={12} /> Drug Regimen Vector
+                            <Pill size={12} /> Pharmacotherapy Vector Space
                           </span>
                           <span className="tii__subscore-val">{drugPct}%</span>
                         </div>
                         <div className="tii__subscore-bar">
                           <div className="tii__subscore-fill tii__subscore-fill--drug" style={{ width: `${drugPct}%` }} />
                         </div>
+                        {sharedDrugsWithWeights.length > 0 && (
+                          <div className="tii__subscore-details">
+                            {sharedDrugsWithWeights.map((dw) => (
+                              <span className="tii__subscore-chip tii__subscore-chip--drug" key={dw.name} title={`Medication: ${dw.name} (w = ${dw.weight.toFixed(2)})`}>
+                                <Pill size={9} style={{ display: 'inline', marginRight: 3 }} />
+                                {dw.name}: <strong>w = {dw.weight.toFixed(2)}</strong>
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -679,6 +745,34 @@ export function TreatmentIntelPatientPage() {
                           <div className="tii__math-formula">
                             Cosine<sub>IDF</sub>(C<sub>tgt</sub>, C<sub>{index + 1}</sub>) = (∑<sub>t ∈ C<sub>tgt</sub> ∩ C<sub>{index + 1}</sub></sub> w<sub>t</sub>²) / (||v<sub>tgt</sub>|| × ||v<sub>{index + 1}</sub>||)
                           </div>
+
+                          {/* Overlapping Disease Features & Exact Weights Breakdown */}
+                          {sharedCondsWithWeights.length > 0 ? (
+                            <div className="tii__math-terms-box">
+                              <div className="tii__math-terms-header">
+                                <Stethoscope size={12} />
+                                <span>Contributing Diseases &amp; Rarity Weights (w<sub>t</sub>):</span>
+                              </div>
+                              <div className="tii__math-terms-list">
+                                {sharedCondsWithWeights.map((cw) => (
+                                  <div className="tii__math-term-item tii__math-term-item--disease" key={cw.name}>
+                                    <span className="tii__math-term-name">{cw.name}</span>
+                                    <span className="tii__math-term-weight-pill">
+                                      w = {cw.weight.toFixed(2)} → w² = {cw.wSq.toFixed(3)}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="tii__math-term-sum">
+                                <strong>Numerator ∑ w<sub>t</sub>²</strong> ={' '}
+                                {sharedCondsWithWeights.map((cw) => `${cw.wSq.toFixed(3)} [${cw.name}]`).join(' + ')}{' '}
+                                = <strong>{s.cond_dot?.toFixed(3) ?? sharedCondsWithWeights.reduce((acc, x) => acc + x.wSq, 0).toFixed(3)}</strong>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="tii__math-terms-empty">No direct condition overlap between Target and Match #{index + 1}</div>
+                          )}
+
                           <div className="tii__math-eval">
                             {s.cond_dot != null && s.cond_norm_tgt != null && s.cond_norm_cand != null ? (
                               <>
@@ -705,6 +799,34 @@ export function TreatmentIntelPatientPage() {
                           <div className="tii__math-formula">
                             Cosine<sub>IDF</sub>(D<sub>tgt</sub>, D<sub>{index + 1}</sub>) = (∑<sub>m ∈ D<sub>tgt</sub> ∩ D<sub>{index + 1}</sub></sub> w<sub>m</sub>²) / (||v<sub>tgt</sub>|| × ||v<sub>{index + 1}</sub>||)
                           </div>
+
+                          {/* Overlapping Drug Features & Exact Weights Breakdown */}
+                          {sharedDrugsWithWeights.length > 0 ? (
+                            <div className="tii__math-terms-box">
+                              <div className="tii__math-terms-header">
+                                <Pill size={12} />
+                                <span>Contributing Drug Regimens &amp; Rarity Weights (w<sub>m</sub>):</span>
+                              </div>
+                              <div className="tii__math-terms-list">
+                                {sharedDrugsWithWeights.map((dw) => (
+                                  <div className="tii__math-term-item tii__math-term-item--drug" key={dw.name}>
+                                    <span className="tii__math-term-name">{dw.name}</span>
+                                    <span className="tii__math-term-weight-pill">
+                                      w = {dw.weight.toFixed(2)} → w² = {dw.wSq.toFixed(3)}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="tii__math-term-sum">
+                                <strong>Numerator ∑ w<sub>m</sub>²</strong> ={' '}
+                                {sharedDrugsWithWeights.map((dw) => `${dw.wSq.toFixed(3)} [${dw.name}]`).join(' + ')}{' '}
+                                = <strong>{s.drug_dot?.toFixed(3) ?? sharedDrugsWithWeights.reduce((acc, x) => acc + x.wSq, 0).toFixed(3)}</strong>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="tii__math-terms-empty">No direct pharmacotherapy overlap between Target and Match #{index + 1}</div>
+                          )}
+
                           <div className="tii__math-eval">
                             {s.drug_dot != null && s.drug_norm_tgt != null && s.drug_norm_cand != null && (s.drug_norm_tgt * s.drug_norm_cand > 0) ? (
                               <>
@@ -731,7 +853,7 @@ export function TreatmentIntelPatientPage() {
                             Score = (0.50 × Cosine<sub>Cond,IDF</sub>) + (0.50 × Cosine<sub>Drug,IDF</sub>)
                           </div>
                           <div className="tii__math-eval">
-                            = (0.50 × {s.condition_similarity ?? 0}) + (0.50 × {s.drug_similarity ?? 0})
+                            = (0.50 × {s.condition_similarity ?? 0} [Conditions: {sharedCondsWithWeights.map(x => x.name).join(', ') || 'None'}]) + (0.50 × {s.drug_similarity ?? 0} [Drugs: {sharedDrugsWithWeights.map(x => x.name).join(', ') || 'None'}])
                             <br />
                             = {(0.5 * (s.condition_similarity ?? 0)).toFixed(3)} + {(0.5 * (s.drug_similarity ?? 0)).toFixed(3)}
                             {' '}= <span className="tii__math-final-score">{s.similarity} ({compPct}% Match)</span>
@@ -782,35 +904,44 @@ export function TreatmentIntelPatientPage() {
                     />
                   )}
 
-                  {/* Shared Diagnoses */}
+                  {/* Shared Diagnoses with Weights */}
                   <div className="tii__tags-section">
-                    <span className="tii__tags-label">Shared Conditions ({s.shared_diagnoses?.length || s.overlap}):</span>
+                    <span className="tii__tags-label">Shared Conditions &amp; Specificity Weights ({s.shared_diagnoses?.length || s.overlap}):</span>
                     <div className="tii__tags-list">
                       {s.shared_diagnoses && s.shared_diagnoses.length > 0 ? (
-                        s.shared_diagnoses.map((d) => (
-                          <span className="tii__tag tii__tag--disease" key={d}>
-                            {d}
-                          </span>
-                        ))
+                        s.shared_diagnoses.map((d) => {
+                          const w = getConditionWeight(d, condWeights)
+                          return (
+                            <span className="tii__tag tii__tag--disease" key={d} title={`Condition: ${d} (Clinical IDF Weight: ${w.toFixed(2)})`}>
+                              <Stethoscope size={10} style={{ display: 'inline', marginRight: 4 }} />
+                              <span className="tii__tag-name">{d}</span>
+                              <span className="tii__tag-weight-badge">w = {w.toFixed(2)}</span>
+                            </span>
+                          )
+                        })
                       ) : (
                         <span className="tii__tag tii__tag--none">No direct condition overlap</span>
                       )}
                     </div>
                   </div>
 
-                  {/* Shared Medications */}
+                  {/* Shared Medications with Weights */}
                   <div className="tii__tags-section">
                     <span className="tii__tags-label">
-                      Shared Pharmacotherapy ({s.shared_medications?.length || s.drug_overlap || 0}):
+                      Shared Pharmacotherapy &amp; Specificity Weights ({s.shared_medications?.length || s.drug_overlap || 0}):
                     </span>
                     <div className="tii__tags-list">
                       {s.shared_medications && s.shared_medications.length > 0 ? (
-                        s.shared_medications.map((m) => (
-                          <span className="tii__tag tii__tag--med" key={m}>
-                            <Pill size={10} style={{ display: 'inline', marginRight: 4 }} />
-                            {m}
-                          </span>
-                        ))
+                        s.shared_medications.map((m) => {
+                          const w = getDrugWeight(m, drugWeights)
+                          return (
+                            <span className="tii__tag tii__tag--med" key={m} title={`Medication: ${m} (Clinical IDF Weight: ${w.toFixed(2)})`}>
+                              <Pill size={10} style={{ display: 'inline', marginRight: 4 }} />
+                              <span className="tii__tag-name">{m}</span>
+                              <span className="tii__tag-weight-badge">w = {w.toFixed(2)}</span>
+                            </span>
+                          )
+                        })
                       ) : (
                         <span className="tii__tag tii__tag--none">No direct drug overlap</span>
                       )}
