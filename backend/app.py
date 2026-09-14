@@ -23,10 +23,20 @@ def create_app():
     from backend.routes.scribe import scribe_bp
     from backend.routes.graph import graph_bp
     from backend.routes.chat import chat_bp
+    from backend.routes.auth import auth_bp
 
     app.register_blueprint(scribe_bp, url_prefix="/api/scribe")
     app.register_blueprint(graph_bp, url_prefix="/api/graph")
     app.register_blueprint(chat_bp, url_prefix="/api/chat")
+    app.register_blueprint(auth_bp, url_prefix="/api/auth")
+
+    # Idempotent demo-account bootstrap. Best-effort so the app can still boot
+    # (and report a degraded health status) if Neo4j is unavailable.
+    try:
+        from backend import user_store
+        user_store.bootstrap_demo_users()
+    except Exception as e:
+        app.logger.warning("Demo user bootstrap skipped: %s", e)
 
     @app.route("/api/health")
     def health():

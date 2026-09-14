@@ -1,5 +1,5 @@
 import { cleanPersonName } from './formatters'
-import type { CypherResult } from './api'
+import { apiFetch } from './api'
 import type { FEdge, FNode } from '../components/feature/FeatureGraph'
 
 export interface RawGraph {
@@ -67,14 +67,12 @@ function pickDisplayName(prop: Record<string, unknown>, label: string): string {
 
 // Add graph-aware wrappers around raw backend JSON.
 export async function fetchPatientGraphRaw(id: string): Promise<RawGraph> {
-  const res = await fetch(`${import.meta.env.VITE_API_BASE ?? ''}/api/graph/patients/${id}?with_graph=1`)
-  if (!res.ok) throw new Error(`Failed to fetch patient graph: ${res.status}`)
-  const json = (await res.json()) as { graph: RawGraph }
+  const json = await apiFetch<{ graph: RawGraph }>(`/api/graph/patients/${id}?with_graph=1`)
   return json.graph
 }
 
 /** Run a cypher query and convert any node/relationship cells into an FNode/FEdge graph. */
-export function graphFromCypher(result: CypherResult): { nodes: FNode[]; edges: FEdge[] } {
+export function graphFromCypher(result: { rows: unknown[][] }): { nodes: FNode[]; edges: FEdge[] } {
   const nodeMap = new Map<string, RawGraph['nodes'][number]>()
   const rels: RawGraph['relationships'] = []
   for (const row of result.rows) {

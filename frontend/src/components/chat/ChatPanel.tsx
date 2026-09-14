@@ -6,8 +6,10 @@ import {
   fetchChatSuggestions,
   type Patient,
   type ChatSuggestion,
+  type ChatTraversal,
 } from '../../lib/api'
 import { ChatMarkdown } from './ChatMarkdown'
+import { TraversalPanel, type TraversalInstance } from './TraversalPanel'
 import { cleanPersonName } from '../../lib/formatters'
 import './ChatPanel.css'
 
@@ -15,6 +17,7 @@ interface Message {
   role: 'user' | 'assistant'
   text: string
   error?: boolean
+  traversal?: ChatTraversal | null
 }
 
 interface Props {
@@ -34,6 +37,8 @@ export function ChatPanel({ compact = false, preselectedPatientId }: Props) {
   const [patientName, setPatientName] = useState<string | null>(null)
   const [loadingSuggestions, setLoadingSuggestions] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [traversalInstances, setTraversalInstances] = useState<TraversalInstance[]>([])
+  const [activeTraversalIndex, setActiveTraversalIndex] = useState(0)
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -91,8 +96,31 @@ export function ChatPanel({ compact = false, preselectedPatientId }: Props) {
       const answer = res.error?.length ? res.error : res.answer
       setMessages((m) => [
         ...m,
-        { role: 'assistant', text: answer ?? 'No answer available.', error: !!res.error },
+        {
+          role: 'assistant',
+          text: answer ?? 'No answer available.',
+          error: !!res.error,
+          traversal: res.traversal,
+        },
       ])
+
+      const resolvedPid = res.patient_id ?? (patientId || undefined)
+      const p = resolvedPid ? patients.find((x) => x.id === resolvedPid) : undefined
+      const label =
+        p && p.first_name
+          ? cleanPersonName(`${p.first_name} ${p.last_name}`)
+          : patientName
+
+      setTraversalInstances((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          query: trimmed,
+          traversal: res.traversal ?? null,
+          patientName: label,
+        },
+      ])
+      setActiveTraversalIndex((prev) => prev + 1)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Chat unavailable.'
       setMessages((m) => [...m, { role: 'assistant', text: msg, error: true }])
@@ -103,6 +131,8 @@ export function ChatPanel({ compact = false, preselectedPatientId }: Props) {
 
   function clearHistory() {
     setMessages([])
+    setTraversalInstances([])
+    setActiveTraversalIndex(0)
   }
 
   return (
@@ -143,75 +173,86 @@ export function ChatPanel({ compact = false, preselectedPatientId }: Props) {
         </div>
       </div>
 
-      <div className="chat-panel__scroll" ref={scrollRef}>
-        {messages.length === 0 ? (
-          <div className="chat-panel__empty">
-            <div className="chat-panel__hero">
-              <div className="chat-panel__hero-badge">
-                <HelpCircle size={13} />
-                <span>
-                  {suggestionsMode === 'patient' && patientName
-                    ? `Patient Focus: ${patientName}`
-                    : 'Knowledge Graph Q&A'}
-                </span>
+      <div className="chat-panel__body">
+        <div className="chat-panel__scroll" ref={scrollRef}>
+          {messages.length === 0 ? (
+            <div className="chat-panel__empty">
+              <div className="chat-panel__hero">
+                <div className="chat-panel__hero-badge">
+                  <HelpCircle size={13} />
+                  <span>
+                    {suggestionsMode === 'patient' && patientName
+                      ? `Patient Focus: ${patientName}`
+                      : 'Knowledge Graph Q&A'}
+                  </span>
+                </div>
+                <p className="chat-panel__hero-desc">
+                  {suggestionsMode === 'patient'
+                    ? 'Ask clinically grounded questions regarding active diagnoses, indicated medications, abnormal lab values, and doctor notes.'
+                    : 'Ask population-wide questions across all patients, disease prevalences, treatments, and clinical consultation records.'}
+                </p>
               </div>
-              <p className="chat-panel__hero-desc">
-                {suggestionsMode === 'patient'
-                  ? 'Ask clinically grounded questions regarding active diagnoses, indicated medications, abnormal lab values, and doctor notes.'
-                  : 'Ask population-wide questions across all patients, disease prevalences, treatments, and clinical consultation records.'}
-              </p>
-            </div>
 
-            <div className="chat-panel__suggestions-header">
-              <span>Suggested Questions</span>
-              <button
-                type="button"
-                className="chat-panel__refresh-btn"
-                onClick={() => loadSuggestions(patientId)}
-                disabled={loadingSuggestions}
-                title="Refresh suggested questions"
-              >
-                <RotateCcw size={12} className={loadingSuggestions ? 'chat-panel__spin' : ''} />
-                <span>Refresh</span>
-              </button>
-            </div>
-
-            <div className="chat-panel__suggestions">
-              {suggestions.map((s, idx) => (
+              <div className="chat-panel__suggestions-header">
+                <span>Suggested Questions</span>
                 <button
-                  key={idx}
                   type="button"
-                  className="chat-panel__suggestion-card"
-                  disabled={busy}
-                  onClick={() => submit(s.prompt)}
+                  className="chat-panel__refresh-btn"
+                  onClick={() => loadSuggestions(patientId)}
+                  disabled={loadingSuggestions}
+                  title="Refresh suggested questions"
                 >
-                  <span className="chat-panel__badge">{s.category}</span>
-                  <span className="chat-panel__suggestion-prompt">{s.prompt}</span>
+                  <RotateCcw size={12} className={loadingSuggestions ? 'chat-panel__spin' : ''} />
+                  <span>Refresh</span>
                 </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          messages.map((m, i) => (
-            <div key={i} className={`chat-panel__msg chat-panel__msg--${m.role}`}>
-              <div className={`chat-panel__bubble ${m.error ? 'chat-panel__bubble--error' : ''}`}>
-                {m.role === 'assistant' && !m.error ? (
-                  <ChatMarkdown content={m.text} />
-                ) : (
-                  m.text
-                )}
+              </div>
+
+              <div className="chat-panel__suggestions">
+                {suggestions.map((s, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    className="chat-panel__suggestion-card"
+                    disabled={busy}
+                    onClick={() => submit(s.prompt)}
+                  >
+                    <span className="chat-panel__badge">{s.category}</span>
+                    <span className="chat-panel__suggestion-prompt">{s.prompt}</span>
+                  </button>
+                ))}
               </div>
             </div>
-          ))
-        )}
+          ) : (
+            messages.map((m, i) => (
+              <div key={i} className={`chat-panel__msg chat-panel__msg--${m.role}`}>
+                <div className={`chat-panel__bubble ${m.error ? 'chat-panel__bubble--error' : ''}`}>
+                  {m.role === 'assistant' && !m.error ? (
+                    <ChatMarkdown content={m.text} />
+                  ) : (
+                    m.text
+                  )}
+                </div>
+              </div>
+            ))
+          )}
 
-        {busy && (
-          <div className="chat-panel__msg chat-panel__msg--assistant">
-            <div className="chat-panel__bubble chat-panel__bubble--typing">
-              <Loader2 className="chat-panel__spin" size={14} aria-hidden />
-              Analyzing knowledge graph & generating clinical response…
+          {busy && (
+            <div className="chat-panel__msg chat-panel__msg--assistant">
+              <div className="chat-panel__bubble chat-panel__bubble--typing">
+                <Loader2 className="chat-panel__spin" size={14} aria-hidden />
+                Analyzing knowledge graph & generating clinical response…
+              </div>
             </div>
-          </div>
+          )}
+        </div>
+
+        {!compact && (
+          <TraversalPanel
+            instances={traversalInstances}
+            activeIndex={activeTraversalIndex}
+            onSelect={setActiveTraversalIndex}
+            loading={busy && traversalInstances.length > 0 && traversalInstances[activeTraversalIndex]?.traversal == null}
+          />
         )}
       </div>
 

@@ -3,6 +3,7 @@ import time
 from flask import Blueprint, request, jsonify
 
 from backend.analysis import graph_fetch, treatment_intel
+from backend.auth_utils import require_auth, require_role
 from backend.neo4j_connection import get_session as neo4j_get_session
 
 graph_bp = Blueprint("graph", __name__)
@@ -67,7 +68,86 @@ def _serialize(graph):
     return node
 
 
+def _execute_read_query(session, query, params=None):
+    """Run a read-only Cypher query and serialize the raw rows (same shape as
+    the /cypher passthrough so the frontend graph tooling can consume it)."""
+    result = session.run(query, **(params or {}))
+    keys = None
+    rows = []
+    for rec in result:
+        row = []
+        for i, key in enumerate(rec.keys()):
+            if keys is None:
+                keys = list(rec.keys())
+            row.append(_serialize_value(rec[i]))
+        rows.append(row)
+    return (keys or []), rows
+
+
+def fetch_cypher_schema(session) -> str:
+    """Return a compact plain-text schema description for LLM prompt injection."""
+    node_result = session.run(
+        "MATCH (n) WITH labels(n) AS l UNWIND l AS label "
+        "WITH label, count(*) AS cnt RETURN label, cnt ORDER BY cnt DESC"
+    )
+    label_counts = [(rec["label"], rec["cnt"]) for rec in node_result]
+
+    # Collect key properties per label
+    label_props: dict[str, list[str]] = {}
+    for label, _ in label_counts:
+        # Labels come from db.labels() — safe for f-string interpolation
+        safe_label = label.replace("`", "")
+        props_result = session.run(
+            f"MATCH (n:`{safe_label}`) RETURN DISTINCT keys(n) AS keys LIMIT 1",
+        )
+        rec = props_result.single()
+        if rec:
+            label_props[label] = rec["keys"]
+
+    rel_result = session.run(
+        "MATCH (a)-[r]->(b) RETURN type(r) AS type, "
+        "head(labels(a)) AS from_label, head(labels(b)) AS to_label, "
+        "count(r) AS cnt ORDER BY cnt DESC"
+    )
+    rels = [(rec["type"], rec["from_label"], rec["to_label"], rec["cnt"]) for rec in rel_result]
+
+    lines = ["Node labels:"]
+    for label, cnt in label_counts:
+        props = label_props.get(label, [])
+        props_str = ", ".join(props[:8])
+        lines.append(f"  {label} ({props_str}) — {cnt} nodes")
+
+    lines.append("\nRelationships:")
+    for rel_type, from_l, to_l, cnt in rels:
+        lines.append(f"  ({from_l})-[:{rel_type}]->({to_l}) — {cnt} edges")
+
+    return "\n".join(lines)
+
+
+# Presets exposed to admin + researcher via /explore. Always read-only and
+# server-authored — arbitrary Cypher remains admin-only (/cypher).
+_GRAPH_PRESETS = {
+    "all_connected": "MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 150",
+    "patients_diagnoses": "MATCH (p:Patient)-[r:HAS_DIAGNOSIS]->(d:Disease) RETURN p, r, d LIMIT 120",
+    "meds_diseases": "MATCH (m:Medication)-[r:TREATS]->(d:Disease) RETURN m, r, d LIMIT 120",
+    "scribe_notes": (
+        "MATCH (p:Patient)-[r:HAS_CONSULTATION_NOTE]->(n:ConsultationNote) "
+        "OPTIONAL MATCH (n)-[m:MENTIONS_DIAGNOSIS]->(d:Disease) RETURN p, r, n, m, d LIMIT 50"
+    ),
+    "abnormal_labs": (
+        'MATCH (p:Patient)-[r:HAS_LAB_TEST]->(l:LabTest) WHERE toLower(l.status) = "abnormal" '
+        "RETURN p, r, l LIMIT 80"
+    ),
+    "treatments_outcomes": "MATCH (p:Patient)-[r:RECEIVED_TREATMENT]->(t:Treatment) RETURN p, r, t LIMIT 100",
+    "doctors_consultations": (
+        "MATCH (doc:Doctor)-[r1:CONDUCTED]->(n:ConsultationNote), "
+        "(p:Patient)-[r2:HAS_CONSULTATION_NOTE]->(n) RETURN doc, r1, n, r2, p LIMIT 50"
+    ),
+}
+
+
 @graph_bp.route("/patients", methods=["GET"])
+@require_auth
 def list_patients():
     """List all patients."""
     try:
@@ -85,6 +165,7 @@ def list_patients():
 
 
 @graph_bp.route("/patients/<patient_id>", methods=["GET"])
+@require_auth
 def get_patient(patient_id):
     """Get a single patient by ID, with optionally scoped graph neighbors."""
     include_graph = request.args.get("with_graph") == "1"
@@ -200,6 +281,7 @@ def get_patient(patient_id):
 
 
 @graph_bp.route("/patients", methods=["POST"])
+@require_role("admin", "doctor")
 def create_patient():
     """Create a new patient node (fields other than id are optional)."""
     data = request.get_json(silent=True) or {}
@@ -222,6 +304,7 @@ def create_patient():
 
 
 @graph_bp.route("/patients/<patient_id>", methods=["PUT"])
+@require_role("admin", "doctor")
 def update_patient(patient_id):
     """Update an existing patient node."""
     data = request.get_json(silent=True) or {}
@@ -246,6 +329,7 @@ def update_patient(patient_id):
 
 
 @graph_bp.route("/patients/<patient_id>", methods=["DELETE"])
+@require_role("admin")
 def delete_patient(patient_id):
     """Delete a patient node and its relationships."""
     try:
@@ -263,6 +347,7 @@ def delete_patient(patient_id):
 
 
 @graph_bp.route("/patients/<patient_id>/intelligence", methods=["GET"])
+@require_auth
 def patient_intelligence(patient_id):
     """Enriched patient view: summary, medical history, similar patients.
 
@@ -279,15 +364,16 @@ def patient_intelligence(patient_id):
 
 
 @graph_bp.route("/patients/<patient_id>/treatment-intel", methods=["GET"])
+@require_auth
 def patient_treatment_intel(patient_id):
     """Per-patient ranked diagnoses (1..N by success likelihood).
 
-    Scoring is deterministic python (lab-normalized outcome among similar
-    patients sharing each diagnosis); no LLM involved.
+    Supports method='vector' (Multimodal Phenotype Vector Space) or 'cypher' (Legacy Jaccard graph join).
     """
+    method = request.args.get("method", "vector")
     try:
         with neo4j_get_session() as s:
-            data = graph_fetch.get_treatment_intel(s, patient_id)
+            data = graph_fetch.get_treatment_intel(s, patient_id, method=method)
         if data is None:
             return jsonify({"error": f"patient {patient_id} not found"}), 404
         return jsonify(_clean_prop_val(data)), 200
@@ -296,6 +382,7 @@ def patient_treatment_intel(patient_id):
 
 
 @graph_bp.route("/sectors/<path:disease_name>/intelligence", methods=["GET"])
+@require_auth
 def sector_treatment_intelligence(disease_name):
     """Return cohort-level treatment intelligence for a disease.
     
@@ -319,6 +406,7 @@ def sector_treatment_intelligence(disease_name):
 
 
 @graph_bp.route("/schema", methods=["GET"])
+@require_auth
 def schema():
     """Return DB meta for the admin panel: node labels + counts, relationship
     types + counts, property keys, and a 'last update' timestamp."""
@@ -358,6 +446,7 @@ def schema():
 
 
 @graph_bp.route("/cypher", methods=["POST"])
+@require_role("admin")
 def cypher_passthrough():
     """Run an arbitrary read-only Cypher query against AuraDB.
 
@@ -374,17 +463,7 @@ def cypher_passthrough():
     start = time.perf_counter()
     try:
         with neo4j_get_session() as s:
-            result = s.run(query, **params)
-            keys = None
-            rows = []
-            for rec in result:
-                rec_vals = []
-                for i, key in enumerate(rec.keys()):
-                    if keys is None:
-                        keys = list(rec.keys())
-                    rec_vals.append(_serialize_value(rec[i]))
-                rows.append(rec_vals)
-            keys = keys or []
+            keys, rows = _execute_read_query(s, query, params)
         elapsed_ms = (time.perf_counter() - start) * 1000
         return jsonify({
             "columns": keys,
@@ -394,6 +473,193 @@ def cypher_passthrough():
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 400
+
+
+@graph_bp.route("/explore", methods=["POST"])
+@require_role("admin", "researcher")
+def explore_preset():
+    """Execute a server-authored, read-only graph preset.
+
+    Researchers (who have Graph Explorer but never raw Cypher access) run the
+    same curated queries via this endpoint. Any client-supplied query is ignored.
+    """
+    data = request.get_json(silent=True) or {}
+    preset = (data.get("preset") or "").strip()
+    query = _GRAPH_PRESETS.get(preset)
+    if not query:
+        return jsonify({"error": "unknown preset; allowed: " + ", ".join(_GRAPH_PRESETS.keys())}), 400
+
+    start = time.perf_counter()
+    try:
+        with neo4j_get_session() as s:
+            keys, rows = _execute_read_query(s, query)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        return jsonify({
+            "preset": preset,
+            "columns": keys,
+            "rows": rows,
+            "timing": {"elapsed_ms": round(elapsed_ms, 1)},
+            "row_count": len(rows),
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@graph_bp.route("/sectors", methods=["GET"])
+@require_auth
+def list_sectors():
+    """Disease cohorts with patient + medication counts (replaces the raw Cypher
+    the Sectors page used to run against /cypher)."""
+    try:
+        with neo4j_get_session() as s:
+            result = s.run(
+                """
+                MATCH (d:Disease)
+                OPTIONAL MATCH (p:Patient)-[:HAS_DIAGNOSIS]->(d)
+                OPTIONAL MATCH (med:Medication)-[:TREATS]->(d)
+                RETURN d.name AS name, count(DISTINCT p) AS patients,
+                       count(DISTINCT med) AS medications
+                ORDER BY patients DESC
+                """
+            )
+            sectors = [
+                {
+                    "name": r["name"],
+                    "patients": r["patients"] or 0,
+                    "medications": r["medications"] or 0,
+                }
+                for r in result
+            ]
+        return jsonify(sectors), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@graph_bp.route("/sectors/<disease>/graph", methods=["GET"])
+@require_auth
+def sector_graph(disease):
+    """Cohort knowledge-graph for a disease (replaces the raw Cypher the sector
+    view page used to run against /cypher)."""
+    name_clean = disease.replace("-", " ").strip()
+    if not name_clean:
+        return jsonify({"error": "disease name is required"}), 400
+    try:
+        with neo4j_get_session() as s:
+            keys, rows = _execute_read_query(
+                s,
+                """
+                MATCH (d:Disease) WHERE toLower(d.name) = toLower($name)
+                MATCH (p:Patient)-[hd:HAS_DIAGNOSIS]->(d)
+                OPTIONAL MATCH (m:Medication)-[tr:TREATS]->(d)
+                OPTIONAL MATCH (t:Treatment)-[tt:TREATS]->(d)
+                RETURN d, p, m, t, hd, tr, tt LIMIT 120
+                """,
+                {"name": name_clean},
+            )
+        return jsonify({"columns": keys, "rows": rows, "row_count": len(rows)}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@graph_bp.route("/patient-summaries", methods=["GET"])
+@require_auth
+def patient_summaries():
+    """Per-patient diagnosis / treatment / lab counts for the Treatment
+    Intelligence dashboard (replaces the raw Cypher dependency)."""
+    try:
+        with neo4j_get_session() as s:
+            result = s.run(
+                """
+                MATCH (p:Patient)
+                OPTIONAL MATCH (p)-[:HAS_DIAGNOSIS]->(d:Disease)
+                OPTIONAL MATCH (p)-[:RECEIVED_TREATMENT]->(t:Treatment)
+                OPTIONAL MATCH (p)-[:HAS_LAB_TEST]->(l:LabTest)
+                RETURN p.id AS id,
+                       collect(DISTINCT d.name) AS diagnoses,
+                       count(DISTINCT t) AS treatmentCount,
+                       count(DISTINCT l) AS labCount
+                """
+            )
+            summaries = [
+                {
+                    "id": r["id"],
+                    "diagnoses": _clean_prop_val(r["diagnoses"] or []),
+                    "treatmentCount": r["treatmentCount"] or 0,
+                    "labCount": r["labCount"] or 0,
+                }
+                for r in result
+            ]
+        return jsonify(summaries), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@graph_bp.route("/dashboard/recent-notes", methods=["GET"])
+@require_auth
+def dashboard_recent_notes():
+    """Most recent consultation notes (replaces the Dashboard raw Cypher call)."""
+    try:
+        with neo4j_get_session() as s:
+            result = s.run(
+                """
+                MATCH (p:Patient)-[:HAS_CONSULTATION_NOTE]->(n:ConsultationNote)
+                RETURN p.id AS id,
+                       p.first_name + ' ' + p.last_name AS name,
+                       n.summary AS summary,
+                       toString(n.created_at) AS created
+                ORDER BY n.created_at DESC LIMIT 6
+                """
+            )
+            notes = [
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "summary": r["summary"],
+                    "created": r["created"],
+                }
+                for r in result
+            ]
+        return jsonify(notes), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@graph_bp.route("/dashboard/top-sectors", methods=["GET"])
+@require_auth
+def dashboard_top_sectors():
+    """Largest disease cohorts (replaces the Dashboard raw Cypher call)."""
+    try:
+        with neo4j_get_session() as s:
+            result = s.run(
+                """
+                MATCH (p:Patient)-[:HAS_DIAGNOSIS]->(d:Disease)
+                RETURN d.name AS disease, count(p) AS patients
+                ORDER BY patients DESC LIMIT 8
+                """
+            )
+            sectors = [
+                {"disease": r["disease"], "patients": r["patients"] or 0}
+                for r in result
+            ]
+        return jsonify(sectors), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@graph_bp.route("/dashboard/treatment-trend", methods=["GET"])
+@require_auth
+def dashboard_treatment_trend():
+    """Treatment date series for the activity trend chart (replaces the raw
+    Cypher dependency). Returns ISO-ish date strings, oldest first."""
+    try:
+        with neo4j_get_session() as s:
+            result = s.run(
+                "MATCH (t:Treatment) RETURN toString(t.treatment_date) AS d ORDER BY d"
+            )
+            dates = [r["d"] for r in result if r["d"]]
+        return jsonify({"dates": dates}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 def _serialize_value(value):

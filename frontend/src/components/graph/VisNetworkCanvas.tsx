@@ -6,6 +6,18 @@ import { labelColor, relColor } from '../../lib/graphColors'
 import { NodePropertiesSidebar, type SelectedNodeInfo, type ConnectedEdgeInfo } from './NodePropertiesSidebar'
 import './VisNetworkCanvas.css'
 
+const LABEL_TRUNCATE_LIMIT = 24
+const LABEL_HIDE_ZOOM = 0.75
+const NODE_LABEL_FONT_SIZE = 9
+const SELECTED_NODE_FONT_SIZE = 13
+const EDGE_LABEL_FONT_SIZE = 8
+const NODE_FONT_FACE = 'Inter, system-ui, sans-serif'
+
+function truncateLabel(label: string): string {
+  if (label.length <= LABEL_TRUNCATE_LIMIT) return label
+  return label.slice(0, LABEL_TRUNCATE_LIMIT - 1).trimEnd() + '…'
+}
+
 export interface VNode {
   id: string
   label: string
@@ -28,6 +40,7 @@ interface Props {
   edgeLabelZoom?: number
   onNodeClick?: (nodeId: string) => void
   showToolbar?: boolean
+  freezeOnStabilize?: boolean
 }
 
 export function VisNetworkCanvas({
@@ -37,9 +50,19 @@ export function VisNetworkCanvas({
   centerId,
   onNodeClick,
   showToolbar = true,
+  freezeOnStabilize = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const networkRef = useRef<Network | null>(null)
+  const scaleRef = useRef(1)
+  const selectedIdRef = useRef<string | null>(null)
+  const matchIdRef = useRef<string | null>(null)
+  const fullLabelMapRef = useRef(new Map<string, string>())
+  const truncLabelMapRef = useRef(new Map<string, string>())
+  const edgeLabelMapRef = useRef(new Map<string, string>())
+  const labelRafRef = useRef<number | null>(null)
+  const physicsEnabledRef = useRef(true)
+  const freezeRef = useRef(false)
 
   const [physicsEnabled, setPhysicsEnabled] = useState(true)
   const [selectedNode, setSelectedNode] = useState<SelectedNodeInfo | null>(null)
@@ -77,16 +100,65 @@ export function VisNetworkCanvas({
     return null
   }, [searchQuery, nodes])
 
+  useEffect(() => {
+    matchIdRef.current = matchId
+  }, [matchId])
+
+  // Mirror physics state into a ref so the network creation effect never needs
+  // to re-run when the toolbar toggles physics (avoids recreating the network).
+  useEffect(() => {
+    physicsEnabledRef.current = physicsEnabled
+  }, [physicsEnabled])
+
+  // Recompute on-canvas labels: hidden below the zoom threshold, truncated above
+  // it, and shown in full for the currently selected node.
+  const refreshLabels = useCallback(() => {
+    if (!networkRef.current) return
+    const visBody = networkRef.current as unknown as {
+      body: {
+        data: {
+          nodes: { update: (items: Array<Record<string, unknown>>) => void }
+          edges: { update: (items: Array<Record<string, unknown>>) => void }
+        }
+      }
+    }
+    const show = scaleRef.current >= LABEL_HIDE_ZOOM
+    const nodeUpdates: Array<Record<string, unknown>> = []
+    for (const [id, full] of fullLabelMapRef.current) {
+      const isSelected = selectedIdRef.current === id
+      const label = isSelected ? full : show ? truncLabelMapRef.current.get(id) ?? full : ''
+      nodeUpdates.push({
+        id,
+        label,
+        font: {
+          color: matchIdRef.current !== null && matchIdRef.current !== id ? '#666e7a' : '#f0f3f6',
+          size: isSelected ? SELECTED_NODE_FONT_SIZE : NODE_LABEL_FONT_SIZE,
+          face: NODE_FONT_FACE,
+        },
+      })
+    }
+    if (nodeUpdates.length > 0) visBody.body.data.nodes.update(nodeUpdates)
+
+    const edgeUpdates: Array<Record<string, unknown>> = []
+    for (const [id, label] of edgeLabelMapRef.current) {
+      edgeUpdates.push({ id, label: show ? label : '' })
+    }
+    if (edgeUpdates.length > 0) visBody.body.data.edges.update(edgeUpdates)
+  }, [])
+
   // Select node and prepare connected edges details for properties sidebar
   const handleSelectNode = useCallback(
     (nodeId: string | null) => {
+      selectedIdRef.current = nodeId
       if (!nodeId) {
         setSelectedNode(null)
+        refreshLabels()
         return
       }
       const rawNode = nodeMap.get(nodeId)
       if (!rawNode) {
         setSelectedNode(null)
+        refreshLabels()
         return
       }
 
@@ -128,13 +200,17 @@ export function VisNetworkCanvas({
       if (onNodeClick) {
         onNodeClick(nodeId)
       }
+
+      refreshLabels()
     },
-    [nodeMap, edges, onNodeClick],
+    [nodeMap, edges, onNodeClick, refreshLabels],
   )
 
   // Initialize and update the Vis.js Network instance
   useEffect(() => {
     if (!containerRef.current) return
+
+    freezeRef.current = false
 
     const visNodes: VisNode[] = nodes.map((n) => {
       const primary = n.labels[0] || 'default'
@@ -144,7 +220,7 @@ export function VisNetworkCanvas({
 
       return {
         id: n.id,
-        label: n.label,
+        label: selectedIdRef.current === n.id ? n.label : truncateLabel(n.label),
         title: `${n.labels.join(', ')}: ${n.label}`,
         shape: 'dot',
         size: isHit ? getNodeSize(n.labels) + 6 : getNodeSize(n.labels),
@@ -166,10 +242,8 @@ export function VisNetworkCanvas({
           : { enabled: true, color: 'rgba(0,0,0,0.4)', size: 4, x: 1, y: 2 },
         font: {
           color: isDimmed ? '#666e7a' : '#f0f3f6',
-          size: 11,
-          face: 'Inter, system-ui, sans-serif',
-          background: 'rgba(10, 14, 20, 0.75)',
-          strokeWidth: 0,
+          size: NODE_LABEL_FONT_SIZE,
+          face: NODE_FONT_FACE,
         },
       }
     })
@@ -200,9 +274,8 @@ export function VisNetworkCanvas({
         },
         font: {
           color: isDimmed ? '#505660' : '#b0b8c4',
-          size: 9,
+          size: EDGE_LABEL_FONT_SIZE,
           align: 'middle',
-          background: 'rgba(13, 17, 23, 0.8)',
           strokeWidth: 0,
         },
       }
@@ -219,7 +292,7 @@ export function VisNetworkCanvas({
         selectionWidth: 2,
       },
       physics: {
-        enabled: physicsEnabled,
+        enabled: physicsEnabledRef.current,
         solver: 'forceAtlas2Based',
         forceAtlas2Based: {
           gravitationalConstant: -40,
@@ -250,6 +323,27 @@ export function VisNetworkCanvas({
     const network = new Network(containerRef.current, { nodes: visNodes, edges: visEdges }, options)
     networkRef.current = network
 
+    // Remember full/truncated labels so they can be swapped at runtime
+    fullLabelMapRef.current = new Map(nodes.map((n) => [n.id, n.label]))
+    truncLabelMapRef.current = new Map(nodes.map((n) => [n.id, truncateLabel(n.label)]))
+    edgeLabelMapRef.current = new Map(edges.map((e) => [e.id, e.label]))
+    scaleRef.current = network.getScale()
+
+    // Refresh labels as the view zooms, throttled to animation frames
+    const scheduleLabelRefresh = () => {
+      if (labelRafRef.current != null) return
+      labelRafRef.current = requestAnimationFrame(() => {
+        labelRafRef.current = null
+        refreshLabels()
+      })
+    }
+    const onZoom = () => {
+      scaleRef.current = network.getScale()
+      scheduleLabelRefresh()
+    }
+    network.on('zoom', onZoom)
+    refreshLabels()
+
     // Events
     network.on('selectNode', (params) => {
       if (params.nodes && params.nodes.length > 0) {
@@ -268,29 +362,68 @@ export function VisNetworkCanvas({
     })
 
     // Center on requested node if provided
+    let focusTimer: ReturnType<typeof setTimeout> | null = null
     if (centerId && nodeMap.has(centerId)) {
-      setTimeout(() => {
-        network.focus(centerId, {
-          scale: 1.15,
-          animation: { duration: 600, easingFunction: 'easeInOutQuad' },
-        })
+      focusTimer = setTimeout(() => {
+        try {
+          if (networkRef.current && nodeMap.has(centerId)) {
+            network.focus(centerId, {
+              scale: 1.15,
+              animation: { duration: 600, easingFunction: 'easeInOutQuad' },
+            })
+          }
+        } catch {
+          // Ignore focus if node or network unmounted
+        }
       }, 350)
     }
 
+    // Auto-freeze physics after initial stabilization
+    let safetyTimer: ReturnType<typeof setTimeout> | null = null
+    let freezeHandler: (() => void) | null = null
+    if (freezeOnStabilize) {
+      const freeze = () => {
+        if (freezeRef.current) return
+        freezeRef.current = true
+        try {
+          network.stopSimulation()
+          network.setOptions({ physics: { enabled: false } })
+          setPhysicsEnabled(false)
+        } catch {}
+      }
+      freezeHandler = freeze
+      network.once('stabilized', freeze)
+      safetyTimer = setTimeout(freeze, 6000)
+    }
+
     return () => {
-      network.destroy()
+      if (focusTimer) clearTimeout(focusTimer)
+      if (safetyTimer) clearTimeout(safetyTimer)
+      if (freezeHandler) network.off('stabilized', freezeHandler)
+      if (labelRafRef.current != null) {
+        cancelAnimationFrame(labelRafRef.current)
+        labelRafRef.current = null
+      }
+      try {
+        network.destroy()
+      } catch {}
       networkRef.current = null
     }
-  }, [nodes, edges, matchId, physicsEnabled, centerId, nodeMap, handleSelectNode])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, edges, matchId, centerId, nodeMap, handleSelectNode, refreshLabels])
 
   // Center on searched node
   useEffect(() => {
     if (matchId && networkRef.current) {
-      networkRef.current.focus(matchId, {
-        scale: 1.2,
-        animation: { duration: 500, easingFunction: 'easeInOutQuad' },
-      })
-      handleSelectNode(matchId)
+      try {
+        networkRef.current.focus(matchId, {
+          scale: 1.2,
+          animation: { duration: 500, easingFunction: 'easeInOutQuad' },
+        })
+        handleSelectNode(matchId)
+      } catch {
+        // Ignore focus error
+      }
     }
   }, [matchId, handleSelectNode])
 

@@ -1,21 +1,24 @@
-import os
 import re
-import tempfile
 import uuid
 
-from flask import Blueprint, request, jsonify, current_app
+import requests
+from flask import Blueprint, request, jsonify
 
-from backend.neo4j_connection import get_session as neo4j_get_session
-from scribe import session as sess
-from scribe.transcription import (
-    transcribe,
-    create_realtime_token,
-    translate_text,
-    TranscriptionError,
+from backend.auth_utils import require_role
+from backend.neo4j_connection import (
+    get_session as neo4j_get_session,
+    is_connected as neo4j_is_connected,
 )
+from scribe import session as sess
+from scribe.transcription import translate_text
 from scribe.extraction import extract, ExtractionError
+from scribe.safety import audit_medication
 
 scribe_bp = Blueprint("scribe", __name__)
+
+# Every scribe route is a clinical workflow (note transcription, extraction,
+# medication safety audit) and is therefore restricted to admin + doctor.
+_CLINICAL_ROLES = ("admin", "doctor")
 
 
 def _new_session_id():
@@ -30,25 +33,15 @@ def _start_upload():
 
 
 @scribe_bp.route("/start", methods=["POST"])
+@require_role(*_CLINICAL_ROLES)
 def start_session():
     """Create a new consultation session. Returns a session_id used by all
     subsequent scribe endpoints."""
     return _start_upload()
 
 
-@scribe_bp.route("/token", methods=["GET"])
-def get_realtime_token():
-    """Mint a temporary WebSocket token from AssemblyAI for live in-browser streaming."""
-    try:
-        token = create_realtime_token()
-        return jsonify({"token": token})
-    except TranscriptionError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": f"Failed to generate AssemblyAI token: {e}"}), 500
-
-
 @scribe_bp.route("/translate", methods=["POST"])
+@require_role(*_CLINICAL_ROLES)
 def live_translate():
     """Translate clinical speech/transcript in real-time into English or another target language."""
     data = request.get_json(silent=True) or {}
@@ -60,69 +53,8 @@ def live_translate():
     return jsonify({"translated_text": translated, "original_text": text})
 
 
-@scribe_bp.route("/upload", methods=["POST"])
-def upload_audio():
-    """Accept a full audio file upload, transcribe via AssemblyAI.
-
-    The frontend first calls /start to get a session_id, then uploads the
-    audio file as multipart form data with that session_id. On transcription
-    failure, the consecutive-failure counter is incremented; after 3 failures
-    the response flags that retry should no longer be offered.
-    """
-    session_id = request.form.get("session_id")
-    if not session_id:
-        return jsonify({"error": "missing session_id"}), 400
-
-    file = request.files.get("audio")
-    if not file:
-        file = request.files.get("file")
-    if not file or not file.filename:
-        return jsonify({"error": "missing audio upload"}), 400
-
-    sess.set_state(session_id, "transcribing")
-
-    suffix = os.path.splitext(file.filename)[1] or ".webm"
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            dir=current_app.config.get("UPLOAD_TEMP_DIR") or tempfile.gettempdir(),
-            suffix=suffix,
-            delete=False,
-        ) as tmp:
-            file.save(tmp.name)
-            tmp_path = tmp.name
-
-        transcript = transcribe(tmp_path)
-
-        # Success — reset failure counter, store transcript for doctor review.
-        sess.set_transcript(session_id, transcript, approved=False)
-        sess.set_state(session_id, "review")
-
-        return jsonify({
-            "session_id": session_id,
-            "transcript": transcript,
-            "status": "review",
-        })
-    except TranscriptionError as e:
-        failures = sess.record_failure(session_id)
-        return jsonify({
-            "error": str(e),
-            "failure_count": failures,
-            "retry_disabled": sess.retry_disabled(session_id),
-        }), 422
-    except Exception as e:
-        failures = sess.record_failure(session_id)
-        return jsonify({
-            "error": f"Transcription failed: {e}",
-            "failure_count": failures,
-            "retry_disabled": sess.retry_disabled(session_id),
-        }), 500
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-
 @scribe_bp.route("/transcript/<session_id>", methods=["GET"])
+@require_role(*_CLINICAL_ROLES)
 def get_transcript(session_id):
     """Retrieve current transcript for a session, plus whether it's been approved."""
     transcript, approved = sess.get_transcript(session_id)
@@ -137,6 +69,7 @@ def get_transcript(session_id):
 
 
 @scribe_bp.route("/transcript/<session_id>", methods=["PUT"])
+@require_role(*_CLINICAL_ROLES)
 def edit_transcript(session_id):
     """Store the doctor-edited/approved transcript.
 
@@ -159,11 +92,16 @@ def edit_transcript(session_id):
 
 
 @scribe_bp.route("/extract/<session_id>", methods=["POST"])
+@require_role(*_CLINICAL_ROLES)
 def extract_note(session_id):
     """Trigger Groq extraction against the approved transcript for this session.
 
     Returns 409 if no transcript exists yet, or 400 if the transcript has not
     been explicitly approved — extraction NEVER runs on an unreviewed transcript.
+    De-identification is mandatory: local HIPAA Safe Harbor PHI scrubbing runs
+    before sending out and again on the returned note, so the structured note
+    never contains names, DOB, age, or other direct identifiers. Clinical dosage
+    safety audits run on extracted items.
     """
     transcript, approved = sess.get_transcript(session_id)
     if transcript is None:
@@ -171,9 +109,21 @@ def extract_note(session_id):
     if not approved:
         return jsonify({"error": "transcript not approved; doctor must approve before extraction"}), 400
 
+    data = request.get_json(silent=True) or {}
+    patient_name = data.get("patient_name")
+    doctor_name = data.get("doctor_name")
+    # De-identification is mandatory: extraction NEVER emits or returns PHI,
+    # regardless of any client-supplied flag.
+    deidentify = True
+
     sess.set_state(session_id, "extracting")
     try:
-        note = extract(transcript)
+        note = extract(
+            transcript,
+            patient_name=patient_name,
+            doctor_name=doctor_name,
+            deidentify=deidentify,
+        )
         # Note is staged in the session store until the doctor confirms save.
         sess.set_state(session_id, "extracted")
         return jsonify({
@@ -181,9 +131,34 @@ def extract_note(session_id):
             "status": "extracted",
             "note": note,
         })
+    except requests.exceptions.RequestException:
+        sess.set_state(session_id, "extract_error")
+        return jsonify({
+            "error": "Groq unreachable — check your internet connection.",
+            "status": "extract_error",
+        }), 502
     except ExtractionError as e:
         sess.set_state(session_id, "extract_error")
         return jsonify({"error": str(e), "status": "extract_error"}), 502
+
+
+@scribe_bp.route("/audit-medication", methods=["POST"])
+@require_role(*_CLINICAL_ROLES)
+def audit_single_medication():
+    """Live audit a single medication for clinical safety, 10x dosage errors, and sound-alikes."""
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "")
+    dosage = data.get("dosage")
+    unit = data.get("unit")
+    frequency = data.get("frequency")
+    route = data.get("route")
+
+    alerts = audit_medication(name=name, dosage=dosage, unit=unit, frequency=frequency, route=route)
+    return jsonify({
+        "medication": {"name": name, "dosage": dosage, "unit": unit, "frequency": frequency, "route": route},
+        "alerts": alerts,
+        "is_safe": len(alerts) == 0,
+    })
 
 
 def _clean_med_name(raw: str) -> str:
@@ -210,6 +185,7 @@ def _canonicalize_disease(session, raw_name: str) -> str:
 
 
 @scribe_bp.route("/save/<session_id>", methods=["POST"])
+@require_role(*_CLINICAL_ROLES)
 def save_note(session_id):
     """Persist the structured note into Neo4j as a connected ConsultationNote
     attached to the patient, diagnosed diseases, discussed medications, and attending doctor.
@@ -231,6 +207,23 @@ def save_note(session_id):
     action_items = note.get("action_items", []) or []
     meds = note.get("medications_discussed", []) or []
     note_id = "CN-" + str(uuid.uuid4())[:8]
+
+    # Convert meds to a list of primitive strings for the ConsultationNote node property
+    meds_summary_strings = []
+    for m in meds:
+        if isinstance(m, dict):
+            name = str(m.get("name") or "").strip()
+            dose = str(m.get("dosage") or "").strip()
+            unit = str(m.get("unit") or "").strip()
+            freq = str(m.get("frequency") or "").strip()
+            parts = [name]
+            if dose:
+                parts.append(f"{dose}{unit}")
+            if freq:
+                parts.append(freq)
+            meds_summary_strings.append(" ".join(parts).strip())
+        elif isinstance(m, str) and m.strip():
+            meds_summary_strings.append(m.strip())
 
     if not title:
         if diagnoses and len(diagnoses) > 0:
@@ -267,7 +260,7 @@ def save_note(session_id):
                 summary=summary,
                 diagnoses=diagnoses,
                 action_items=action_items,
-                meds=meds,
+                meds=meds_summary_strings,
             )
 
             # 2. Canonicalize and link Diagnoses: (p)-[:HAS_DIAGNOSIS]->(d), (n)-[:MENTIONS_DIAGNOSIS]->(d)
@@ -291,24 +284,49 @@ def save_note(session_id):
                     d_name=can_name,
                 )
 
-            # 3. Clean and link Medications: (n)-[:DISCUSSES_MEDICATION]->(m), (m)-[:TREATS]->(d)
+            # 3. Clean and link Medications: (n)-[:DISCUSSES_MEDICATION]->(med), (p)-[:PRESCRIBED]->(med), (med)-[:TREATS]->(disease)
             for m in meds:
-                raw_m = m.get("name") if isinstance(m, dict) else str(m)
+                if isinstance(m, dict):
+                    raw_m = m.get("name", "")
+                    dosage = m.get("dosage")
+                    unit = m.get("unit")
+                    freq = m.get("frequency")
+                    route = m.get("route")
+                    rationale = m.get("rationale")
+                else:
+                    raw_m = str(m)
+                    dosage, unit, freq, route, rationale = None, None, None, None, None
+
                 clean_m = _clean_med_name(raw_m)
                 if not clean_m:
                     continue
+
                 s.run(
                     """
                     MATCH (n:ConsultationNote {id: $note_id})
+                    MATCH (p:Patient {id: $patient_id})
                     MERGE (med:Medication {name: $m_name})
-                    MERGE (n)-[:DISCUSSES_MEDICATION]->(med)
+                    MERGE (n)-[dm:DISCUSSES_MEDICATION]->(med)
+                    SET dm.dosage = $dosage, dm.unit = $unit, dm.frequency = $freq, dm.route = $route, dm.rationale = $rationale
+                    MERGE (p)-[pr:PRESCRIBED]->(med)
+                    SET pr.dosage = coalesce($dosage, pr.dosage),
+                        pr.unit = coalesce($unit, pr.unit),
+                        pr.frequency = coalesce($freq, pr.frequency),
+                        pr.route = coalesce($route, pr.route),
+                        pr.status = 'Active'
                     WITH med
                     UNWIND $diseases AS d_name
                     MATCH (disease:Disease {name: d_name})
                     MERGE (med)-[:TREATS]->(disease)
                     """,
                     note_id=note_id,
+                    patient_id=patient_id,
                     m_name=clean_m,
+                    dosage=dosage,
+                    unit=unit,
+                    freq=freq,
+                    route=route,
+                    rationale=rationale,
                     diseases=canonical_diseases,
                 )
 
@@ -326,10 +344,13 @@ def save_note(session_id):
         import traceback
         traceback.print_exc()
         sess.set_state(session_id, "save_error")
+        if not neo4j_is_connected():
+            return jsonify({"error": "Database unreachable — cannot save notes while offline."}), 503
         return jsonify({"error": f"Database save failed: {e}"}), 500
 
 
 @scribe_bp.route("/status/<session_id>", methods=["GET"])
+@require_role(*_CLINICAL_ROLES)
 def session_status(session_id):
     """Return current pipeline state: idle, transcribing, review, approved,
     extracting, extracted, extract_error, save_error, saved (or None)."""

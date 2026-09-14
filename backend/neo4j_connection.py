@@ -29,6 +29,11 @@ def check_connectivity():
         return False
 
 
+def is_connected() -> bool:
+    """Short-circuit connectivity check used by offline-ready routes."""
+    return check_connectivity()
+
+
 def close():
     global _driver
     if _driver is not None:

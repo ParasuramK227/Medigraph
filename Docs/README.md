@@ -201,7 +201,7 @@ npm run dev
 
 ## Deployment on Render
 
-MediGraph is configured for 1-click cloud deployment on [Render](https://render.com) using [`render.yaml`](./render.yaml):
+MediGraph is configured for 1-click cloud deployment on [Render](https://render.com) using [`render.yaml`](../render.yaml):
 
 1. Log into [dashboard.render.com](https://dashboard.render.com).
 2. Click **"New +"** $\to$ **"Blueprint"**.

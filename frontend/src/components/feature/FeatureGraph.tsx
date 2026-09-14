@@ -6,9 +6,11 @@ export type FEdge = VEdge
 interface Props {
   nodes: FNode[]
   edges: FEdge[]
-  height?: number
+  height?: number | string
   centerId?: string
   edgeLabelZoom?: number
+  showToolbar?: boolean
+  freezeOnStabilize?: boolean
 }
 
 export function FeatureGraph({
@@ -17,6 +19,8 @@ export function FeatureGraph({
   height = 580,
   centerId,
   edgeLabelZoom = 1.0,
+  showToolbar = true,
+  freezeOnStabilize = false,
 }: Props) {
   return (
     <VisNetworkCanvas
@@ -25,6 +29,8 @@ export function FeatureGraph({
       height={height}
       centerId={centerId}
       edgeLabelZoom={edgeLabelZoom}
+      showToolbar={showToolbar}
+      freezeOnStabilize={freezeOnStabilize}
     />
   )
 }

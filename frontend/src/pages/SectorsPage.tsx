@@ -1,14 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { FolderKanban, Loader2, Search, X } from 'lucide-react'
-import { runCypher } from '../lib/api'
+import { fetchSectors, type SectorRow } from '../lib/api'
 import './SectorsPage.css'
-
-interface SectorRow {
-  name: string
-  patients: number
-  medications: number
-}
 
 function slug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
@@ -21,23 +15,10 @@ export function SectorsPage() {
 
   useEffect(() => {
     let cancelled = false
-    runCypher(
-      `MATCH (d:Disease)
-       OPTIONAL MATCH (p:Patient)-[:HAS_DIAGNOSIS]->(d)
-       OPTIONAL MATCH (med:Medication)-[:TREATS]->(d)
-       RETURN d.name AS name, count(DISTINCT p) AS patients, count(DISTINCT med) AS medications
-       ORDER BY patients DESC`,
-    )
-      .then((res) => {
+    fetchSectors()
+      .then((rows) => {
         if (cancelled) return
-        if (res.error) return
-        setSectors(
-          res.rows.map((r) => ({
-            name: String(r[0]),
-            patients: Number(r[1]),
-            medications: Number(r[2]),
-          })),
-        )
+        setSectors(rows)
       })
       .catch(() => {
         if (!cancelled) setSectors([])

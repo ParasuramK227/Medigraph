@@ -12,20 +12,21 @@ import {
   Download,
   Sparkles,
 } from 'lucide-react'
-import { runCypher, fetchSchema, type GraphSchema } from '../lib/api'
+import { runCypher, exploreGraph, fetchSchema, type GraphSchema } from '../lib/api'
 import { graphFromCypher } from '../lib/graphData'
 import { labelColor, chipTextContrast } from '../lib/graphColors'
 import { LazyFeatureGraph, type FNode, type FEdge } from '../components/feature/LazyFeatureGraph'
+import { useAuth } from '../hooks/useAuth'
 import './GraphExplorerPage.css'
 
 const PRESETS = [
-  { label: 'All Connected (Overview)', query: 'MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 150' },
-  { label: 'Patients + Active Diagnoses', query: 'MATCH (p:Patient)-[r:HAS_DIAGNOSIS]->(d:Disease) RETURN p, r, d LIMIT 120' },
-  { label: 'Medications → Diseases Treated', query: 'MATCH (m:Medication)-[r:TREATS]->(d:Disease) RETURN m, r, d LIMIT 120' },
-  { label: 'AI Scribe Notes & Diagnoses', query: 'MATCH (p:Patient)-[r:HAS_CONSULTATION_NOTE]->(n:ConsultationNote) OPTIONAL MATCH (n)-[m:MENTIONS_DIAGNOSIS]->(d:Disease) RETURN p, r, n, m, d LIMIT 50' },
-  { label: 'Abnormal Lab Biomarkers', query: 'MATCH (p:Patient)-[r:HAS_LAB_TEST]->(l:LabTest) WHERE toLower(l.status) = "abnormal" RETURN p, r, l LIMIT 80' },
-  { label: 'Clinical Treatments & Outcomes', query: 'MATCH (p:Patient)-[r:RECEIVED_TREATMENT]->(t:Treatment) RETURN p, r, t LIMIT 100' },
-  { label: 'Doctors → Consultations', query: 'MATCH (doc:Doctor)-[r1:CONDUCTED]->(n:ConsultationNote), (p:Patient)-[r2:HAS_CONSULTATION_NOTE]->(n) RETURN doc, r1, n, r2, p LIMIT 50' },
+  { key: 'all_connected', label: 'All Connected (Overview)', query: 'MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 150' },
+  { key: 'patients_diagnoses', label: 'Patients + Active Diagnoses', query: 'MATCH (p:Patient)-[r:HAS_DIAGNOSIS]->(d:Disease) RETURN p, r, d LIMIT 120' },
+  { key: 'meds_diseases', label: 'Medications → Diseases Treated', query: 'MATCH (m:Medication)-[r:TREATS]->(d:Disease) RETURN m, r, d LIMIT 120' },
+  { key: 'scribe_notes', label: 'AI Scribe Notes & Diagnoses', query: 'MATCH (p:Patient)-[r:HAS_CONSULTATION_NOTE]->(n:ConsultationNote) OPTIONAL MATCH (n)-[m:MENTIONS_DIAGNOSIS]->(d:Disease) RETURN p, r, n, m, d LIMIT 50' },
+  { key: 'abnormal_labs', label: 'Abnormal Lab Biomarkers', query: 'MATCH (p:Patient)-[r:HAS_LAB_TEST]->(l:LabTest) WHERE toLower(l.status) = "abnormal" RETURN p, r, l LIMIT 80' },
+  { key: 'treatments_outcomes', label: 'Clinical Treatments & Outcomes', query: 'MATCH (p:Patient)-[r:RECEIVED_TREATMENT]->(t:Treatment) RETURN p, r, t LIMIT 100' },
+  { key: 'doctors_consultations', label: 'Doctors → Consultations', query: 'MATCH (doc:Doctor)-[r1:CONDUCTED]->(n:ConsultationNote), (p:Patient)-[r2:HAS_CONSULTATION_NOTE]->(n) RETURN doc, r1, n, r2, p LIMIT 50' },
 ]
 
 // Properties we consider "identifying" (shown first / emphasised); everything
@@ -51,6 +52,8 @@ function primaryLabel(node: FNode): string {
 }
 
 export function GraphExplorerPage() {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
   const [query, setQuery] = useState('MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 150')
   const [nodes, setNodes] = useState<FNode[]>([])
   const [edges, setEdges] = useState<FEdge[]>([])
@@ -75,11 +78,13 @@ export function GraphExplorerPage() {
     }
   }, [])
 
-  const run = async (q: string) => {
+  const run = async (q: string, preset?: string) => {
     setLoading(true)
     setError(null)
     try {
-      const res = await runCypher(q)
+      // Researchers never execute raw Cypher — they run the curated, read-only
+      // presets via /api/graph/explore. Admin retains the free-form console.
+      const res = isAdmin ? await runCypher(q) : await exploreGraph(preset ?? 'all_connected')
       if (res.error) {
         setError(res.error)
         setNodes([])
@@ -103,7 +108,10 @@ export function GraphExplorerPage() {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    runCypher('MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 150')
+    const promise = isAdmin
+      ? runCypher('MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 150')
+      : exploreGraph('all_connected')
+    promise
       .then((res) => {
         if (cancelled) return
         if (res.error) return
@@ -120,7 +128,7 @@ export function GraphExplorerPage() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [isAdmin])
 
   const typeCounts = useMemo(() => {
     const counts = new Map<string, number>()
@@ -233,34 +241,43 @@ export function GraphExplorerPage() {
             onChange={(e) => setQuery(e.target.value)}
             rows={2}
             placeholder="MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 150"
+            readOnly={!isAdmin}
+            title={isAdmin ? 'Run Cypher query (Ctrl/Cmd+Enter)' : 'Researchers run curated presets below — raw Cypher is admin-only'}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && isAdmin) {
                 e.preventDefault()
                 void run(query)
               }
             }}
           />
-          <button
-            type="button"
-            className="graph-explorer__run"
-            title="Run Cypher query (Ctrl/Cmd+Enter)"
-            onClick={() => void run(query)}
-          >
-            <Play size={16} />
-          </button>
+          {isAdmin && (
+            <button
+              type="button"
+              className="graph-explorer__run"
+              title="Run Cypher query (Ctrl/Cmd+Enter)"
+              onClick={() => void run(query)}
+            >
+              <Play size={16} />
+            </button>
+          )}
         </div>
+        {!isAdmin && (
+          <p className="graph-explorer__presets-note">
+            Curated read-only graphs only — free-form Cypher is restricted to administrators.
+          </p>
+        )}
         <div className="graph-explorer__presets">
           <span className="graph-explorer__presets-title">
             <Sparkles size={13} /> Presets:
           </span>
           {PRESETS.map((p) => (
             <button
-              key={p.label}
+              key={p.key}
               type="button"
               className="graph-explorer__preset"
               onClick={() => {
                 setQuery(p.query)
-                void run(p.query)
+                void run(p.query, p.key)
               }}
             >
               {p.label}

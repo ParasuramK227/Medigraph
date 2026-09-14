@@ -15,7 +15,7 @@ This guide walks you through deploying **MediGraph** on [Render](https://render.
 
 ## Method 1: Automatic 1-Click Blueprint (Recommended)
 
-Render Blueprints automatically configure both the **Backend Web Service** and the **Frontend Static Site** using the [`render.yaml`](./render.yaml) file in the repository.
+Render Blueprints automatically configure both the **Backend Web Service** and the **Frontend Static Site** using the [`render.yaml`](../render.yaml) file in the repository.
 
 ### Step-by-Step Instructions:
 
