@@ -4,3 +4,4 @@ python-dotenv==1.*
 neo4j==5.*
 requests==2.32.*
 gunicorn>=21.2.0
+PyJWT==2.*
