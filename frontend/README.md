@@ -1,91 +1,117 @@
 # MediGraph — Frontend Web Application
 
-React 19 (TypeScript/TSX) + Vite frontend for MediGraph. Features interactive force-directed Vis.js graph exploration, an AI medical scribe with real-time audio visualization and translation, Neo4j Admin Console, and responsive mobile-optimized UI.
+React 19 + TypeScript + Vite modern clinical web interface for MediGraph. Features 100% in-browser on-device audio transcription, interactive force-directed Vis.js graph physics, multimodal vector comparison tools, and a Neo4j Browser replica console.
+
+[![React 19](https://img.shields.io/badge/React-19.2-61dafb.svg?logo=react)](https://react.dev/)
+[![Vite 8](https://img.shields.io/badge/Vite-8.2-646cff.svg?logo=vite)](https://vitejs.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.0-blue.svg?logo=typescript)](https://www.typescriptlang.org/)
+[![Vis.js](https://img.shields.io/badge/Graph-Vis.js%20Network-orange.svg)](https://visjs.github.io/vis-network/docs/network/)
+[![WASM Multithreading](https://img.shields.io/badge/Edge%20AI-WASM%20SharedArrayBuffer-purple.svg)](https://webassembly.org/)
 
 ---
 
-## Technology Stack
+## 🌟 Key Highlights
 
-- **React 19** (TSX) + **Vite 8**
-- **TypeScript** (Strict mode)
-- **Vis.js Network (`vis-network`)** — Force-directed canvas physics for graph exploration
-- **Lucide Icons (`lucide-react`)**
-- **Plain CSS with Design Tokens** — CSS custom properties, zero CSS-in-JS overhead, light/dark themes
-- **Audio Visualizer** — Custom SVG/Canvas audio-level meter inspired by CAVA
-
----
-
-## Layout & Navigation
-
-- **Left-Docked Navigation Rail** (`SideNav.tsx`): Persistent sidebar on desktop viewports.
-- **Mobile Responsive Drawer** (`AppLayout.tsx`): Collapses to an off-canvas drawer with a hamburger trigger below `768px`, with touch-friendly backdrops and automated route navigation listeners.
-- **Top Bar**: Real-time backend connectivity status (`BackendStatus.tsx`) and light/dark theme switcher (`ThemeToggle.tsx`).
-- **Floating Clinical Chatbot** (`ChatFloatingButton.tsx`): Persistent floating assistant available across all pages with responsive modal scaling on mobile screens.
+- **100% In-Browser Speech-to-Text**: Powered by **Moonshine Medium Streaming WASM** and **Browser Whisper Tiny**. Zero acoustic data leaves the client machine.
+- **Multimodal Vector Comparator**: Interactive bit-by-bit feature vector projection component displaying aligned condition/drug bits and clinical IDF specificity tags.
+- **Role-Based Routing**: Strict client-side route protection (`<ProtectedRoute allowedRoles={['admin', ...]}>`) backed by React Context (`AuthContext.tsx`).
+- **Interactive Knowledge Graph**: Vis.js force-directed canvas with Barnes-Hut repulsion, collision stabilization, and animated node property drawers.
+- **Neo4j Admin Console**: In-app replica of Neo4j Browser with Cypher prompt, query history, live latency ping, schema inspector, and CSV/JSON export.
+- **Performance & Isolation**: Configured with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers for high-performance WebAssembly multithreading.
 
 ---
 
-## Routing & Pages
+## 📁 Directory Structure
 
 ```
-/                             → Dashboard (KPI cards, 18-month treatment activity SVG, recent consultations)
-/patients                     → Patient Directory (search, demographics, contact info)
-/patients/:id                 → Patient Detail Dossier (embedded Scribe, Vis.js graph, similar patient cohort)
-/sectors                      → Clinical Sectors (disease cohort search, patient distributions)
-/sectors/:disease             → Sector Intelligence (biomarker control rates, top treatments, line-of-therapy)
-/treatment-intelligence       → Treatment Intelligence (physiological biomarker control ranking)
-/graph                        → Graph Explorer (Vis.js interactive canvas, preset queries, node inspection)
-/admin/graph                  → Neo4j Admin Console (Neo4j Browser replica, live latency ping, Cypher runner)
-/chatbot                      → Clinical Assistant Chat (graph-grounded conversational RAG)
+frontend/
+├── public/
+│   ├── fonts/                # Departure Mono & custom clinical monospace fonts
+│   └── models/moonshine/     # Self-hosted Moonshine WASM model weights
+├── src/
+│   ├── components/
+│   │   ├── admin/            # AdminGraphPanel (Neo4j Browser replica)
+│   │   ├── auth/             # ProtectedRoute & Role Guards
+│   │   ├── chat/             # Clinical Chatbot Floating Widget & Panel
+│   │   ├── feature/          # LazyFeatureGraph (Cytoscape overlay)
+│   │   ├── graph/            # VisNetworkCanvas & NodePropertiesSidebar
+│   │   ├── layout/           # AppLayout, SideNav, TopBar, ThemeToggle
+│   │   └── scribe/           # ScribeWidget & CAVA Audio Visualizer
+│   ├── context/
+│   │   └── AuthContext.tsx   # React AuthProvider, session restoration & JWT handling
+│   ├── lib/
+│   │   ├── api.ts            # Typed REST API client with auto-injected Bearer tokens
+│   │   ├── auth-storage.ts   # LocalStorage session persistence helpers
+│   │   ├── browserMoonshine.ts # Moonshine WASM streaming engine
+│   │   ├── browserWhisper.ts   # HuggingFace Transformers.js Whisper Tiny pipeline
+│   │   └── graphColors.ts    # Centralized medical entity color taxonomy
+│   ├── pages/                # Application Page Components (Dashboard, Patients, Sectors, Intel)
+│   ├── styles/               # CSS design tokens, typography, dark/light themes
+│   ├── App.tsx               # Main routing tree and role permissions
+│   └── main.tsx              # React DOM root mounting
+├── package.json              # Frontend dependencies
+└── vite.config.ts            # Vite build configuration with isolation headers
 ```
 
 ---
 
-## Core Interactive Features
+## 🗺️ Application Routes
 
-### 1. Interactive Vis.js Network (`VisNetworkCanvas.tsx`)
-- **Physics Simulation**: Force-directed layout algorithm with Barnes-Hut repulsion and collision stabilization.
-- **Canvas Controls**: Zoom in/out, fit to viewport, toggle physics, and quick label search overlay.
-- **Node Properties Sidebar** (`NodePropertiesSidebar.tsx`): Slide-out drawer on node or edge selection displaying properties, metadata, and connected entities. Fully responsive on mobile ($100\%$ width).
-- **Color Taxonomy**: Centralized node coloring via `src/lib/graphColors.ts` matching medical entity types (`:Patient`, `:Disease`, `:Medication`, `:Treatment`, `:ConsultationNote`, `:Doctor`, `:LabTest`).
-
-### 2. AI Medical Scribe (`ScribeWidget.tsx`)
-- Embedded in Patient Detail views and Admin Graph views.
-- **Workflow Stages**:
-  `Idle → Recording (CAVA Audio Meter) → Transcribing (AssemblyAI) → Review/Edit (Doctor Verification) → Extracting (Groq) → Saved to Neo4j`
-- **Real-Time Translation**: Live translation into English or other languages via Groq.
-- **Zero-Compounding Hallucination**: Physicians verify/edit transcripts *before* LLM extraction runs.
-- **Failure Resilience**: Automatic fallback to manual typed consultation notes if recording fails.
-
-### 3. Neo4j Admin Console (`AdminGraphPanel.tsx`)
-- Faithfully replicates the official Neo4j Browser interface:
-  - Top status bar with live AuraDB latency ping (`ms`) and connection status.
-  - Left rail with Database Information (node labels, relationship pills, property keys).
-  - Cypher query editor (`neo4j$` prompt) with bookmarking and query execution.
-  - Persistent Query History drawer backed by browser `localStorage`.
-  - Multi-tab results: **Graph Canvas**, **Data Table**, and **RAW JSON** with CSV/JSON export.
+| Route | Component | Permitted Roles | Description |
+| :--- | :--- | :--- | :--- |
+| `/login` | `LoginPage` | *Public* | User authentication with demo account quick-selection. |
+| `/unauthorized` | `UnauthorizedPage` | *Public* | Access denied screen when role permissions are insufficient. |
+| `/` | `DashboardPage` | Authenticated | Clinical KPIs, 18-month activity trend SVG, recent consultations. |
+| `/patients` | `PatientsPage` | Authenticated | Patient registry with search, demographic badges, and condition tags. |
+| `/patients/:id` | `PatientDetailPage` | Authenticated | Complete EHR dossier, embedded Scribe, Vis.js graph, similar cohort. |
+| `/treatment-intelligence` | `TreatmentIntelligencePage` | Authenticated | Population treatment summary table with diagnosis and lab counts. |
+| `/treatment-intelligence/:id` | `TreatmentIntelPatientPage`| Authenticated | **Multi-Hot Vector Comparator**, IDF weights, similarity proofs. |
+| `/sectors` | `SectorsPage` | Authenticated | Disease cohort directory with patient and medication distributions. |
+| `/sectors/:id` | `SectorViewPage` | Authenticated | Sector intelligence, biomarker control rates, 1st-line therapies. |
+| `/graph` | `GraphExplorerPage` | `admin`, `researcher`| Interactive Vis.js canvas with curated read-only Cypher presets. |
+| `/admin/graph` | `AdminGraphPage` | `admin` | Full Neo4j Browser replica with Cypher prompt, latency ping, CSV export. |
+| `/chatbot` | `ChatbotPage` | Authenticated | Full-page clinical conversational assistant grounded in graph context. |
 
 ---
 
-## Design Tokens & Typography
+## 🎙️ On-Device Scribe Engine
 
-All tokens reside in `src/styles/tokens.css`:
-- **Headings**: Outfit (Google Fonts)
-- **Body**: Inter (Google Fonts)
-- **Clinical Stats & Monospace**: Departure Mono (Self-hosted webfont in `public/fonts/`)
+Located in `src/components/scribe/ScribeWidget.tsx` and `src/lib/browserMoonshine.ts`:
+
+1. **WASM Audio Streaming**:
+   Captures audio via standard browser `navigator.mediaDevices.getUserMedia`. Passes 16 kHz audio chunks into the `@moonshine-ai/moonshine-wasm` multithreaded worker.
+2. **CAVA-Inspired Real-Time Equalizer**:
+   Uses the Web Audio API `AnalyserNode` to compute real-time Fast Fourier Transform (FFT) frequencies, animating a multi-bar canvas visualizer.
+3. **Doctor Verification Stage**:
+   Transcription renders in an editable text area. Physicians review, correct, and click **Approve** before extraction can proceed—eliminating compounding hallucinations.
+4. **Multilingual Translation**:
+   Provides one-click translation into standardized clinical English for non-English consultations.
+5. **Medication Safety Warning**:
+   Displays real-time dosage warnings and ISMP sound-alike alerts during review.
 
 ---
 
-## Running Locally
+## 🎨 Design Tokens & Theming
+
+MediGraph uses pure CSS variables without CSS-in-JS overhead (`src/styles/tokens.css`):
+* **Typography**:
+  * Display & Headings: `Outfit` (Google Fonts)
+  * Interface & Prose: `Inter` (Google Fonts)
+  * Clinical Metrics & Cypher Code: `Departure Mono` (Self-hosted webfont in `public/fonts/`)
+* **Theming**: Toggleable Light and Dark themes (`ThemeToggle.tsx`) persisted across sessions.
+
+---
+
+## 🏃 Running Locally
 
 ```bash
-# Navigate to frontend
+# Navigate to frontend directory
 cd frontend
 
 # Install dependencies
 npm install
 
-# Start development server
+# Start Vite development server
 npm run dev
 # App runs at http://localhost:5173
-```
-
+```\n

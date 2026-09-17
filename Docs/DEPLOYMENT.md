@@ -1,87 +1,88 @@
 # MediGraph Cloud Deployment Guide (Render)
 
-This guide walks you through deploying **MediGraph** on [Render](https://render.com) using your GitHub repository (`ParasuramK227/Medigraph.`).
+This guide walks you through deploying **MediGraph** on [Render](https://render.com) using your GitHub repository.
 
 ---
 
-## Architecture Overview
+## 🏗️ Architecture Overview
 
-* **Frontend**: React 19 + TypeScript + Vite + Vis.js (SPA)
-* **Backend**: Python 3.11 + Flask + Gunicorn WSGI
-* **Database**: Neo4j AuraDB Cloud (`neo4j+s://05b7caea.databases.neo4j.io`)
-* **AI Engine**: Groq Cloud (`gpt-oss-120b`) + AssemblyAI
+* **Frontend**: React 19 + TypeScript + Vite Static Site on global CDN with `COOP` / `COEP` WebAssembly multithreading headers.
+* **Backend**: Python 3.11 + Flask 3.1 + Gunicorn WSGI Web Service.
+* **Database**: Neo4j AuraDB Cloud Enterprise (`neo4j+s://...`).
+* **Edge STT**: 100% Client-side Moonshine Medium Streaming WASM (Zero cloud audio streaming costs).
+* **Inference**: Groq Cloud (`openai/gpt-oss-120b`) for structured SOAP extraction and Chatbot RAG.
 
 ---
 
-## Method 1: Automatic 1-Click Blueprint (Recommended)
+## 🚀 Method 1: Automatic 1-Click Blueprint (Recommended)
 
-Render Blueprints automatically configure both the **Backend Web Service** and the **Frontend Static Site** using the [`render.yaml`](../render.yaml) file in the repository.
+Render Blueprints automatically configure both the **Backend Web Service** and the **Frontend Static Site** using the [`render.yaml`](../render.yaml) blueprint specification in the root directory.
 
 ### Step-by-Step Instructions:
 
 1. **Sign in to Render**:
-   - Go to [dashboard.render.com](https://dashboard.render.com) and sign in (using GitHub).
+   - Navigate to [dashboard.render.com](https://dashboard.render.com) and log in with your GitHub account.
 
 2. **Create New Blueprint**:
    - Click the **"New +"** button at the top right.
    - Select **"Blueprint"**.
-   - Connect your GitHub repository: `ParasuramK227/Medigraph.`.
+   - Connect your GitHub repository: `ParasuramK227/Medigraph`.
 
-3. **Configure Environment Variables**:
-   Render will automatically detect `render.yaml` and prompt you for the backend secret variables:
-   | Key | Description | Example / Location |
+3. **Configure Secret Environment Variables**:
+   Render will detect `render.yaml` and prompt you for required secrets:
+
+   | Variable | Description | Example / Location |
    | :--- | :--- | :--- |
-   | `NEO4J_URI` | Neo4j AuraDB Bolt URI | `neo4j+s://05b7caea.databases.neo4j.io` |
+   | `NEO4J_URI` | Neo4j AuraDB Bolt URI | `neo4j+s://<id>.databases.neo4j.io` |
    | `NEO4J_USER` | Neo4j Username | `neo4j` |
-   | `NEO4J_PASSWORD` | Neo4j Password | From your AuraDB credentials |
-   | `GROQ_API_KEY` | Groq API Key | `gsk_...` (from console.groq.com) |
-   | `ASSEMBLYAI_API_KEY` | AssemblyAI API Key | From assemblyai.com |
-   | `CORS_ORIGINS` | Allowed CORS origins | `*` (or leave default `*`) |
+   | `NEO4J_PASSWORD` | Neo4j AuraDB Password | From your AuraDB credentials file |
+   | `GROQ_API_KEY` | Groq API Key | From [console.groq.com](https://console.groq.com) |
+   | `JWT_SECRET_KEY` | JWT Signing Secret | Random string ($\ge 32$ chars) |
+   | `JWT_EXPIRATION_MINUTES` | Access Token Lifetime | `480` |
+   | `CORS_ORIGINS` | Allowed Origins | `*` |
 
 4. **Click "Apply"**:
-   - Render will build and deploy both services simultaneously:
-     * **`medigraph-backend`**: Runs Gunicorn Python server on the free tier.
-     * **`medigraph-frontend`**: Builds the Vite React SPA and deploys it on Render's global static CDN with free SSL.
-     * Render automatically links `VITE_API_BASE` from the backend to the frontend.
+   Render will deploy:
+   * **`medigraph-backend`**: Builds with `pip install -r requirements.txt` and starts Gunicorn.
+   * **`medigraph-frontend`**: Builds the React Vite SPA and deploys it on Render's global CDN with mandatory `COOP` and `COEP` headers.
 
 ---
 
-## Method 2: Single Unified Web Service (All-in-One Free Tier)
+## 🔒 WebAssembly Multithreading Header Verification
 
-If you prefer having **one single URL** (e.g. `https://medigraph.onrender.com`) where the Python server serves both the React UI and the REST API:
+Moonshine WASM requires `SharedArrayBuffer`, which browsers only enable if these HTTP response headers are present on the frontend:
 
-1. In Render, click **"New +"** $\to$ **"Web Service"**.
-2. Connect your repo: `ParasuramK227/Medigraph.`.
-3. Configure the service:
-   * **Name**: `medigraph`
-   * **Language**: `Python`
-   * **Branch**: `main`
-   * **Build Command**:
-     ```bash
-     npm --prefix frontend install && npm --prefix frontend run build && pip install -r requirements.txt
-     ```
-   * **Start Command**:
-     ```bash
-     gunicorn --workers=2 --threads=4 --timeout=120 "backend.app:create_app()"
-     ```
-   * **Instance Type**: `Free`
-4. Add the Environment Variables under **Environment**:
-   * `PYTHON_VERSION`: `3.11.0`
-   * `NEO4J_URI`: `neo4j+s://05b7caea.databases.neo4j.io`
-   * `NEO4J_USER`: `neo4j`
-   * `NEO4J_PASSWORD`: `<your-neo4j-password>`
-   * `GROQ_API_KEY`: `<your-groq-api-key>`
-   * `ASSEMBLYAI_API_KEY`: `<your-assemblyai-key>`
-5. Click **"Create Web Service"**.
+```http
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+These headers are pre-configured in [`render.yaml`](../render.yaml) under the `medigraph-frontend` static service specification:
+
+```yaml
+    headers:
+      - path: /*
+        name: Cross-Origin-Opener-Policy
+        value: same-origin
+      - path: /*
+        name: Cross-Origin-Embedder-Policy
+        value: require-corp
+```
 
 ---
 
-## Verifying the Deployment
+## 🔍 Verifying the Deployment
 
-Once deployed:
-1. Open your frontend URL (`https://medigraph-frontend.onrender.com`).
-2. Verify:
-   - **Dashboard**: KPI statistics and patient counts load from Neo4j.
-   - **Health Check**: Check `https://<backend-url>/api/health` — it should return `{"status": "ok", "neo4j": "connected"}`.
-   - **Chatbot**: Send a question in the Clinical Assistant to verify the Groq `gpt-oss-120b` response.
-   - **Graph Explorer**: Run a preset query to confirm Vis.js graph rendering.
+1. **Health Check**:
+   Open `https://<backend-url>/api/health` — it should return:
+   ```json
+   {"status": "ok", "neo4j": "connected"}
+   ```
+2. **Demo Sign-In**:
+   Open `https://<frontend-url>/login` and sign in with:
+   * Username: `admin`
+   * Password: `AdminPassword123!`
+3. **Audio Transcription**:
+   Open any patient (`/patients/<id>`) and click **"Start Dictation"** in the Scribe widget. Ensure microphone audio animates the CAVA visualizer and streams live text.
+4. **Treatment Intelligence**:
+   Navigate to `/treatment-intelligence/<id>` and verify that the **Multi-Hot Vector Comparator** displays aligned clinical feature vectors.\n

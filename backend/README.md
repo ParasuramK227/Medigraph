@@ -1,97 +1,149 @@
 # MediGraph — Backend API & Analytics Engine
 
-Python 3.11 + Flask REST API and clinical analytics engine for MediGraph. Powers the AI clinical scribe pipeline, Neo4j knowledge graph queries, physiological treatment intelligence, and chatbot graph RAG.
+Python 3.11 + Flask REST API and clinical analytics engine for MediGraph. Powers the AI clinical scribe pipeline, Neo4j knowledge graph queries, physiological treatment intelligence, multimodal phenotype vector similarity, and chatbot graph RAG.
+
+[![Python 3.11](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/)
+[![Flask 3.1](https://img.shields.io/badge/Flask-3.1-black.svg)](https://flask.palletsprojects.com/)
+[![Neo4j 5.x](https://img.shields.io/badge/Neo4j-5.x-008cc1.svg)](https://neo4j.com/)
+[![PyJWT](https://img.shields.io/badge/Auth-PyJWT%20(HMAC--SHA256)-green.svg)](https://pyjwt.readthedocs.io/)
+[![Groq LLM](https://img.shields.io/badge/LLM-Groq%20Cloud%20(gpt--oss--120b)-f55036.svg)](https://groq.com/)
 
 ---
 
-## Technology Stack
+## 🏗️ Architecture & Boundaries
 
-- **Python 3.11**
-- **Flask 3.1 & Flask-CORS** (REST API microframework)
-- **Gunicorn WSGI** (production deployment on Render)
-- **Neo4j AuraDB Cloud Driver (`neo4j` 5.x)** (Bolt connection via `neo4j+s://` protocol)
-- **AssemblyAI Cloud SDK** (streaming WebSocket temporary tokens & REST transcription)
-- **Groq Cloud API (`openai/gpt-oss-120b`)** (clinical note extraction, multilingual translation, and chatbot RAG)
-- **Requests & Python-Dotenv** (HTTP client and environment variable configuration)
+The backend coordinates four distinct service boundaries with strict security and data governance:
+
+1. **Authentication & RBAC (`/api/auth/*`)**: Stateless JWT issuance, Werkzeug PBKDF2 password hashing, and user role management (`admin`, `doctor`, `researcher`).
+2. **Clinical Scribe & Safety (`/api/scribe/*`)**: Consultation session management, multilingual translation, mandatory local HIPAA Safe Harbor de-identification, Groq structured extraction, 10x dosage error detection, and Neo4j graph persistence.
+3. **Knowledge Graph & Treatment Intelligence (`/api/graph/*`)**: Graph introspection, curated explorer presets, patient EHR CRUD, cohort sectors, and the deterministic Multimodal Phenotype Vector Space.
+4. **Clinical Chatbot RAG (`/api/chat/*`)**: Typo-tolerant entity resolution, schema-grounded Cypher query generation, and de-identified LLM clinical reasoning.
 
 ---
 
-## Directory Structure
+## 📁 Directory Structure
 
 ```
 backend/
 ├── analysis/
-│   ├── graph_fetch.py        # Graph data retrieval helpers for patients, diseases & treatments
-│   └── treatment_intel.py    # Physiological biomarker control rate scoring & line-of-therapy ranking
+│   ├── graph_fetch.py        # Cypher retrieval helpers for patients, diseases, labs, notes
+│   └── treatment_intel.py    # Multimodal IDF Vector Engine & Physiological Threshold Scoring
 ├── routes/
-│   ├── chat.py               # /api/chat — Clinical Assistant RAG with graph-grounded context
-│   ├── graph.py              # /api/graph — Cypher query execution, schema introspection, sectors & cohorts
-│   └── scribe.py             # /api/scribe — AssemblyAI token minting, transcription, translation & extraction
+│   ├── auth.py               # /api/auth — Login, register, me, users, role updates
+│   ├── chat.py               # /api/chat — Graph-grounded conversational RAG
+│   ├── graph.py              # /api/graph — Schema, patients, sectors, presets, Cypher console
+│   └── scribe.py             # /api/scribe — Translation, extraction, safety audits, note saving
 ├── scripts/
 │   ├── seed.py               # Standard database seeder (data/ CSVs)
-│   └── synthea_seeder.py     # Comprehensive clinical seeder (synthea_sample_data_csv_latest/)
-├── app.py                    # Flask application factory, CORS setup & static fallback
+│   └── synthea_seeder.py     # Synthea clinical data graph seeder
+├── app.py                    # Flask application factory, CORS, static fallback & health
+├── auth_utils.py             # Centralized JWT decorators (@require_auth, @require_role)
+├── chat_privacy.py           # Chatbot profile PHI sanitization
 ├── neo4j_connection.py       # Thread-safe Neo4j driver connection pooling & health checks
+├── user_cache.json           # Offline mirrored user storage
+├── user_store.py             # Neo4j user persistence & demo bootstrap
 └── requirements.txt          # Python dependencies
 ```
 
 ---
 
-## API Service Boundaries
+## 🔌 API Service Specifications
 
-### 1. Scribe Service (`/api/scribe/*`)
-- `POST /api/scribe/start`: Initializes a new consultation session and generates a unique `session_id`.
-- `GET /api/scribe/token`: Mints a temporary WebSocket token from AssemblyAI for in-browser live streaming transcription.
-- `POST /api/scribe/transcribe`: Accepts an audio file upload (`.webm`, `.mp3`, `.wav`) and transcribes it via AssemblyAI REST API.
-- `POST /api/scribe/translate`: Translates speech or transcripts in real time into English or target languages via Groq.
-- `POST /api/scribe/extract`: Takes a doctor-reviewed transcript and extracts structured SOAP notes (summary, diagnoses, action items, medications) using Groq (`openai/gpt-oss-120b`) and `scribe/prompts/scribe_extraction.md`.
-- `POST /api/scribe/save`: Persists the structured consultation note to Neo4j as a `:ConsultationNote` node, linked to `:Patient`, `:Disease`, and `:Medication` nodes.
+### 1. Authentication & User Management (`/api/auth/*`)
 
-### 2. Knowledge Graph API (`/api/graph/*`)
-- `POST /api/graph/cypher`: Direct Cypher execution endpoint for the Neo4j Admin Console, returning formatted tabular and graph data.
-- `GET /api/graph/schema`: Introspects database labels, property keys, and node/relationship counts.
-- `GET /api/graph/patients`: Retrieves patient records, demographics, and active conditions.
-- `GET /api/graph/patients/<id>`: Returns a comprehensive patient dossier including diagnoses, medications, lab tests, consultation history, and similar patient cohorts.
-- `GET /api/graph/patients/<id>/graph`: Generates a patient-scoped sub-graph payload formatted for Vis.js force-directed rendering.
-- `GET /api/graph/sectors`: Groups patients into disease cohorts, reporting patient counts and top treatment protocols.
-- `GET /api/graph/sectors/<disease>`: Cohort-level clinical analytics, biomarker control rates, and line-of-therapy breakdown.
-- `GET /api/graph/treatment-intelligence`: Population-level treatment intelligence, ranking therapies by clinical biomarker control rates.
+| Endpoint | Method | Role Required | Description |
+| :--- | :---: | :---: | :--- |
+| `/api/auth/login` | `POST` | *Public* | Authenticates with `username`/`email` and `password`. Returns JWT token and user profile. |
+| `/api/auth/register` | `POST` | *Public* | Registers a new account (default role: `researcher`). |
+| `/api/auth/me` | `GET` | Authenticated | Validates JWT token and returns current user profile. |
+| `/api/auth/users` | `GET` | `admin` | Lists all registered accounts (public safe fields only). |
+| `/api/auth/users/<id>/role` | `PUT` | `admin` | Updates a user's role (`admin`, `doctor`, `researcher`). Prevents self-demotion. |
 
-### 3. Chatbot RAG (`/api/chat/*`)
-- `POST /api/chat/message`: Graph-grounded conversational agent. Automatically detects patient context or cohort context, executes Cypher queries to build a clinical prompt, and streams response tokens from Groq.
-- `GET /api/chat/prompts`: Generates dynamic suggested questions tailored to the selected patient's active conditions or the current cohort.
+### 2. Clinical Scribe Pipeline (`/api/scribe/*`)
 
-### 4. Health Check (`/api/health`)
-- Returns `{"status": "ok", "neo4j": "connected"}` verifying live database connectivity and latency.
+*All scribe operations are restricted to `admin` and `doctor`.*
+
+| Endpoint | Method | Description |
+| :--- | :---: | :--- |
+| `/api/scribe/start` | `POST` | Initializes a new consultation session and generates a unique `session_id`. |
+| `/api/scribe/translate` | `POST` | Translates consultation transcripts in real time into standardized clinical English via Groq. |
+| `/api/scribe/transcript/<id>` | `GET` | Retrieves the stored transcript and approval status for a session. |
+| `/api/scribe/transcript/<id>` | `PUT` | Stores physician-edited and approved transcript (*mandatory prior to extraction*). |
+| `/api/scribe/extract/<id>` | `POST` | Executes Groq structured SOAP extraction on approved transcript after HIPAA de-identification. |
+| `/api/scribe/audit-medication` | `POST` | Audits a single prescription for 10x dosage multiplier errors, therapeutic ranges, and ISMP SALAD confusions. |
+| `/api/scribe/save/<id>` | `POST` | Commits structured note to Neo4j as `:ConsultationNote`, auto-linking `:Disease` and `:Medication` nodes. |
+| `/api/scribe/status/<id>` | `GET` | Returns current session pipeline state (`idle`, `review`, `extracting`, `extracted`, `saved`). |
+
+### 3. Knowledge Graph & Analytics (`/api/graph/*`)
+
+| Endpoint | Method | Role Required | Description |
+| :--- | :---: | :---: | :--- |
+| `/api/graph/patients` | `GET` | Authenticated | Lists all patients ordered by name. |
+| `/api/graph/patients/<id>` | `GET` | Authenticated | Fetches single patient dossier; optionally includes Vis.js graph (`?with_graph=1`). |
+| `/api/graph/patients` | `POST` | `admin`, `doctor` | Creates a new patient node. |
+| `/api/graph/patients/<id>` | `PUT` | `admin`, `doctor` | Updates demographic and clinical properties of a patient. |
+| `/api/graph/patients/<id>` | `DELETE` | `admin` | Detaches and deletes a patient node. |
+| `/api/graph/patients/<id>/intelligence` | `GET` | Authenticated | Enriched patient view: medical history, active conditions, similar patients. |
+| `/api/graph/patients/<id>/treatment-intel` | `GET` | Authenticated | Multimodal Phenotype Vector similarity ranking and proof vectors. |
+| `/api/graph/sectors` | `GET` | Authenticated | Disease cohorts with patient and medication counts. |
+| `/api/graph/sectors/<disease>/graph` | `GET` | Authenticated | Scoped sub-graph for a specific disease cohort. |
+| `/api/graph/sectors/<disease>/intelligence` | `GET` | Authenticated | Cohort treatment intelligence, top medications, recovery rates, biomarker control. |
+| `/api/graph/schema` | `GET` | Authenticated | Database metadata for admin console: labels, relationship counts, property keys. |
+| `/api/graph/explore` | `POST` | `admin`, `researcher` | Executes curated read-only Cypher presets for graph exploration. |
+| `/api/graph/cypher` | `POST` | `admin` | Arbitrary Cypher execution endpoint for the Neo4j Admin Console. |
+| `/api/graph/dashboard/*` | `GET` | Authenticated | Endpoints for recent notes, top sectors, and 18-month treatment trends. |
+
+### 4. Chatbot RAG (`/api/chat/*`)
+
+| Endpoint | Method | Role Required | Description |
+| :--- | :---: | :---: | :--- |
+| `/api/chat/message` | `POST` | Authenticated | Graph-grounded conversational agent. Executes entity resolution, Cypher traversal, de-identification, and Groq LLM inference. |
+| `/api/chat/prompts` | `GET` | Authenticated | Generates dynamic, context-aware prompt recommendations tailored to active patient or cohort conditions. |
+
+### 5. System Health (`/api/health`)
+
+| Endpoint | Method | Role Required | Description |
+| :--- | :---: | :---: | :--- |
+| `/api/health` | `GET` | *Public* | Returns `{"status": "ok", "neo4j": "connected"}` verifying live database connectivity. |
 
 ---
 
-## Physiological Treatment Intelligence
+## 🧬 Multimodal Clinical Vector Similarity Engine
 
-Located in `backend/analysis/treatment_intel.py`, the scoring engine evaluates actual clinical control rates based on biomarker physiological thresholds:
+Located in `backend/analysis/treatment_intel.py`, the engine computes mathematically grounded similarity across patients without relying on LLM judgments:
 
-- **Type 2 Diabetes / Prediabetes**: Evaluates Fasting Glucose ($\le 125\text{ mg/dL}$) and HbA1c ($\le 7.0\%$).
-- **Hypertension**: Evaluates Systolic BP ($< 130\text{ mmHg}$) and Diastolic BP ($< 80\text{ mmHg}$).
-- **Anemia**: Evaluates Hemoglobin ($\ge 12.0\text{ g/dL}$) and Hematocrit ($\ge 36\%$).
-- **Obesity**: Evaluates BMI ($< 30.0\text{ kg/m}^2$).
-
-Treatment options are ranked by:
-1. **Control Rate %**: Percentage of patients on the therapy who achieved physiological control.
-2. **Line of Therapy**: 1st Line (primary guideline recommendation) vs. 2nd/3rd Line.
-3. **Cohort Evidence**: Total patient count receiving the regimen.
+1. **Inverse Patient Frequency (IDF) Formulation**:
+   $$\text{IDF}(t) = \ln\left(1 + \frac{N}{1 + \text{DF}(t)}\right)$$
+   Rare conditions and high-impact medications receive weights up to $1.0$, while common baselines receive lower weights down to $0.15$.
+2. **Weighted Cosine Vector Distance**:
+   Calculates similarity over aligned binary feature vectors:
+   $$\text{Cosine}(\vec{u}, \vec{v}) = \frac{\sum_{i} w_i^2 \cdot u_i \cdot v_i}{\|\vec{u}\|_{w} \cdot \|\vec{v}\|_{w}}$$
+3. **Deterministic Physiological Biomarker Scoring**:
+   * **Diabetes / Prediabetes**: Fasting Glucose $\le 125\text{ mg/dL}$ & $\text{HbA1c} \le 7.0\%$.
+   * **Hypertension**: Systolic BP $< 130\text{ mmHg}$ & Diastolic BP $< 80\text{ mmHg}$.
+   * **Anemia**: Hemoglobin $\ge 12.0\text{ g/dL}$ & Hematocrit $\ge 36.0\%$.
+   * **Obesity**: BMI $< 30.0\text{ kg/m}^2$.
 
 ---
 
-## Running Locally
+## 🔒 Security & Offline Resilience
+
+* **JWT Secret Management**: Strong HMAC-SHA256 signature verification via `JWT_SECRET_KEY` (minimum 32 characters in production).
+* **PBKDF2 Password Hashing**: Passwords are never stored in plaintext and never transmitted across API responses.
+* **Offline Mirroring**: Every user authentication read/write is cached in `backend/user_cache.json`. If Neo4j AuraDB becomes unreachable, local authentication continues working seamlessly so on-device scribing is never blocked.
+
+---
+
+## 🏃 Running Locally
 
 ```bash
-# Activate virtual environment
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+# Navigate to project root and activate virtual environment
+source .venv/bin/activate  # On Windows: .venv\Scripts\Activate.ps1
 
 # Install dependencies
-pip install -r backend/requirements.txt
+pip install -r requirements.txt
 
 # Run development server
 python -m backend.app
-# Server runs at http://localhost:5000
-```
+# Server listens at http://localhost:5000
+```\n
